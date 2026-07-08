@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets & local config
+.env
+
+# Data files — the DB and S3 are the source of truth, never the repo.
+# (The NBA repo accumulated ~10 multi-hundred-MB feature CSV backups at root.)
+*.csv
+*.parquet
+data/
+
+# Model artifacts (live in S3 via core/artifact_store.py)
+models/
+*.joblib
+*.pt
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/tfplan
+infra/terraform.tfvars
+
+# IDE volatile state
+.idea/workspace.xml

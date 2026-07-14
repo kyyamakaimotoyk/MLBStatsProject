@@ -19,6 +19,9 @@ models/
 *.joblib
 *.pt
 
+# Runtime logs
+logs/
+
 # Terraform
 infra/.terraform/
 infra/*.tfstate

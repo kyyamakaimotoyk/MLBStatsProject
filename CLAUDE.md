@@ -41,5 +41,14 @@ project is built around.
 ```powershell
 .venv\Scripts\python scripts\migrate.py      # apply pending migrations
 .venv\Scripts\python scripts\check_db.py     # connectivity + schema sanity check
+.venv\Scripts\python scripts\audit_ingest.py # ingestion exit-criteria audit
 cd infra; terraform plan                     # infra changes (tfvars has home IP)
+
+# Ingestion (ledger-driven, resumable — safe to kill and rerun):
+.venv\Scripts\python -m ingestion.backfill_games --season 2024 --workers 6
+.venv\Scripts\python -m ingestion.backfill_statcast --limit 10
+.venv\Scripts\python -m ingestion.import_reference --chadwick
 ```
+
+To retry ledger entries that exhausted their attempts:
+`UPDATE ingest_ledger SET attempts=0, status='pending' WHERE status='error';`

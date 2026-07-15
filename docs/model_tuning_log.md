@@ -204,6 +204,28 @@ Remaining queue: dedicated totals model (parked E3 features), batter B1-B4.
 
 ---
 
+## E6 — 2026-07-15 — dedicated totals model: REJECTED (null)
+
+**Setup.** lgbm_runs_tt: runs heads unchanged + a dedicated Poisson totals
+head on a totals-focused subset (no DIFF_*/ELO_DIFF/ELO_P_HOME). Variants
+with and without the parked E3 flags (umpire, wind_out). Snapshot
+v20260715_091625; margin/p_home provably untouched (0 discordant picks).
+
+**Result (8,713 paired games, totals MAE).** Dedicated head alone: 3.5597 vs
+shipped 3.5556 (p=.39) — no better than summing the runs heads. With
+umpire+wind: 3.5550 vs 3.5597 (p=.13) — the E3 effect appears a third time
+(~-.005, p=.13-.25 every time) and fails significance a third time. Net vs
+shipped config: p=.91.
+
+**Decision.** Rejected. The market totals gap (3.466 vs our 3.555) is not
+addressable by rearranging current features — the missing ingredient is NEW
+information: real weather FORECASTS (we train on game-time weather and serve
+NaN), venue scoring drift, bullpen-day specifics. Queued as E6b: forecast
+weather feed for the daily pipeline + rolling venue scoring environment.
+The tiny umpire/wind effect likely becomes shippable as seasons accumulate.
+
+---
+
 ## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
 
 **Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with

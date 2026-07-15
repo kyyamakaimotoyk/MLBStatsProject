@@ -98,6 +98,33 @@ class RunsClsModel(RunsModel):
         return out
 
 
+class RunsPlusTotalsModel(RunsModel):
+    """E6: runs heads for margin/p_home unchanged + a DEDICATED totals head.
+
+    The totals head trains on a totals-focused subset: DIFF_* columns and
+    ELO_DIFF/ELO_P_HOME are margin information — noise for totals — while
+    park/weather/umpire, both starters' quality, both offenses, and both
+    lineups are the drivers. Keeping the runs heads for margin/p_home means
+    a paired comparison against RunsModel isolates the totals change.
+    """
+
+    def __init__(self, family: str, seed: int = 0):
+        super().__init__(family, seed)
+        self.hyperparams = {**self.hyperparams, "structure": "runs_two_head_totals_head"}
+
+    def fit(self, train: pd.DataFrame, feats: list[str]) -> None:
+        super().fit(train, feats)
+        self.total_feats = [c for c in feats if not c.startswith("DIFF_")
+                            and c not in ("ELO_DIFF", "ELO_P_HOME")]
+        self.head_total = _regressor(self.family, "count", self.seed + 3)
+        self.head_total.fit(train[self.total_feats], train["TARGET_TOTAL"])
+
+    def predict(self, test: pd.DataFrame, feats: list[str]) -> pd.DataFrame:
+        out = super().predict(test, feats)
+        out["pred_total"] = self.head_total.predict(test[self.total_feats])
+        return out
+
+
 class DirectModel:
     """Direct margin (L2) and total (Poisson) heads — the comparison baseline."""
 
@@ -181,6 +208,7 @@ class ConstBaseline:
 MODEL_TYPES = {
     "lgbm_runs": lambda seed=0: RunsModel("lgbm", seed),
     "lgbm_runs_cls": lambda seed=0: RunsClsModel("lgbm", seed),
+    "lgbm_runs_tt": lambda seed=0: RunsPlusTotalsModel("lgbm", seed),
     "lgbm_direct": lambda seed=0: DirectModel("lgbm", seed),
     "xgb_runs": lambda seed=0: RunsModel("xgb", seed),
     "xgb_direct": lambda seed=0: DirectModel("xgb", seed),

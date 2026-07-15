@@ -40,6 +40,39 @@ resource "aws_iam_role_policy" "scheduler" {
   })
 }
 
+# Afternoon refresh at 21:00 UTC (5pm ET): posted lineups for evening games
+# and late probable announcements. Predictions upsert, so this sharpens the
+# morning run rather than duplicating it. Started games are skipped by the
+# slate's Preview filter.
+resource "aws_scheduler_schedule" "lineup_refresh" {
+  name                         = "${var.project}-lineup-refresh"
+  schedule_expression          = "cron(0 21 * * ? *)"
+  schedule_expression_timezone = "UTC"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = aws_ecs_cluster.main.arn
+    role_arn = aws_iam_role.scheduler.arn
+
+    ecs_parameters {
+      task_definition_arn = aws_ecs_task_definition.pipeline.arn
+      launch_type         = "FARGATE"
+      network_configuration {
+        subnets          = aws_subnet.public[*].id
+        security_groups  = [aws_security_group.pipeline_task.id]
+        assign_public_ip = true
+      }
+    }
+
+    retry_policy {
+      maximum_retry_attempts = 1
+    }
+  }
+}
+
 resource "aws_scheduler_schedule" "daily_pipeline" {
   name                         = "${var.project}-daily-pipeline"
   schedule_expression          = "cron(0 14 * * ? *)"

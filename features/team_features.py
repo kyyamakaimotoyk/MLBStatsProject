@@ -543,14 +543,14 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
 
 
 def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
-    """team_id -> LINEUP_* values for PROJECTED lineups (the daily path).
+    """(game_pk, team_id) -> LINEUP_* values for the daily path.
 
-    projected columns: team_id, player_id, lineup_slot. Rates come from
+    projected columns: game_pk, team_id, player_id, lineup_slot — one lineup
+    per (game, team), either the POSTED nine (once lineups land ~2-4h
+    pregame) or the team's projection as fallback. Rates come from
     batter_features.build_asof (data through asof_date); missing-regular
-    compares the projection against the team's last 15 posted lineups.
-    Caveat until real lineups are consumed: the projection is the last posted
-    lineup, so 'missing regular' reflects yesterday's absences, not today's
-    scratches — rerunning after lineups post sharpens it.
+    compares against the team's last 15 posted lineups. With a posted
+    lineup this reflects today's actual scratches.
     """
     from features import batter_features as bf
     from features.batter_features import CLASSES
@@ -572,7 +572,7 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
     """), get_engine(), params={"asof": asof_date})
 
     out = {}
-    for team_id, nine in projected.groupby("team_id"):
+    for (game_pk, team_id), nine in projected.groupby(["game_pk", "team_id"]):
         rows = nine.merge(b, left_on="player_id", right_index=True, how="left")
         w = rows["lineup_slot"].map(SLOT_PA_WEIGHTS).to_numpy(float)
         vals = {}
@@ -607,7 +607,7 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
                         missing_val += share * float(b.loc[p, "woba_dev"])
             vals["LINEUP_MISSING_WOBA"] = missing_val
             vals["LINEUP_N_REG_OUT"] = n_out
-        out[team_id] = vals
+        out[(game_pk, team_id)] = vals
     return out
 
 
@@ -675,7 +675,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             team_id = g.home_team_id if side == "home" else g.away_team_id
             side_vals = team_at(team_id, g.season, game_date.to_datetime64())
             side_vals.update(bp(team_id, game_date.to_datetime64()))
-            side_vals.update(lineup_vals.get(team_id, {}))
+            side_vals.update(lineup_vals.get((g.game_pk, team_id), {}))
             pid = getattr(g, f"{side}_probable_id")
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1

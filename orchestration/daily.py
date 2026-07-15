@@ -144,12 +144,24 @@ def refresh_ingest(target_date: str) -> None:
     backfill_statcast.run(sleep=0.5)
 
 
-def fetch_slate(target_date: str) -> pd.DataFrame:
-    games = statsapi_client.schedule(target_date, target_date, hydrate="probablePitcher")
-    rows = []
+def fetch_slate(target_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Returns (slate, posted_lineups). Posted lineups appear ~2-4h pregame;
+    the hydrate returns the nine in batting order (validated against the live
+    feed's battingOrder)."""
+    games = statsapi_client.schedule(target_date, target_date,
+                                     hydrate="probablePitcher,lineups")
+    rows, posted = [], []
     for g in games:
         if g.get("status", {}).get("abstractGameState") != "Preview":
             continue
+        lu = g.get("lineups") or {}
+        for side_key, side in (("homePlayers", "home"), ("awayPlayers", "away")):
+            players = lu.get(side_key) or []
+            if len(players) >= 9:
+                team_id = g["teams"][side]["team"]["id"]
+                posted += [{"game_pk": g["gamePk"], "team_id": team_id,
+                            "player_id": p["id"], "lineup_slot": slot}
+                           for slot, p in enumerate(players[:9], start=1)]
         rows.append({
             "game_pk": g["gamePk"],
             "game_date": g["officialDate"],
@@ -189,7 +201,34 @@ def fetch_slate(target_date: str) -> pd.DataFrame:
     log.info("slate for %s: %d games (%d with both probables)", target_date, len(slate),
              int((slate["home_probable_id"].notna() & slate["away_probable_id"].notna()).sum())
              if not slate.empty else 0)
-    return slate
+    return slate, pd.DataFrame(posted)
+
+
+def _game_lineups(slate: pd.DataFrame, posted: pd.DataFrame,
+                  projected: pd.DataFrame) -> pd.DataFrame:
+    """One lineup per (game, team): the POSTED lineup where available, else
+    the team's projection — per game, so doubleheaders resolve correctly."""
+    posted_keys = (set(zip(posted["game_pk"], posted["team_id"]))
+                   if len(posted) else set())
+    parts = []
+    for g in slate.itertuples():
+        for team_id in (g.home_team_id, g.away_team_id):
+            if (g.game_pk, team_id) in posted_keys:
+                sub = posted[(posted["game_pk"] == g.game_pk)
+                             & (posted["team_id"] == team_id)].copy()
+                sub["source"] = "posted"
+            else:
+                sub = projected[projected["team_id"] == team_id][
+                    ["team_id", "player_id", "lineup_slot"]].copy()
+                sub["game_pk"] = g.game_pk
+                sub["source"] = "projected"
+            parts.append(sub)
+    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
+        columns=["game_pk", "team_id", "player_id", "lineup_slot", "source"])
+    n_posted = out[out["source"] == "posted"].groupby(["game_pk", "team_id"]).ngroups
+    n_proj = out[out["source"] == "projected"].groupby(["game_pk", "team_id"]).ngroups
+    log.info("lineups: %d posted, %d projected (team-games)", n_posted, n_proj)
+    return out
 
 
 def predict_team(slate: pd.DataFrame, target_date: str, asof: str,
@@ -255,7 +294,7 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
     bundle = _batter_bundle(target_date)
     comp = bf.build_asof(asof)
     if lineups is None:
-        lineups = _projected_lineups()
+        lineups = _game_lineups(slate, pd.DataFrame(), _projected_lineups())
     players = pd.read_sql(text("SELECT player_id, bats, throws FROM players"), get_engine())
 
     rows = []
@@ -263,7 +302,8 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
         for side in ("home", "away"):
             team = g.home_team_id if side == "home" else g.away_team_id
             sp_id = g.away_probable_id if side == "home" else g.home_probable_id
-            nine = lineups[lineups["team_id"] == team]
+            nine = lineups[(lineups["game_pk"] == g.game_pk)
+                           & (lineups["team_id"] == team)]
             for b in nine.itertuples():
                 rows.append({
                     "game_pk": g.game_pk, "season": g.season, "venue_id": g.venue_id,
@@ -366,7 +406,7 @@ def main() -> None:
         refresh_ingest(target)
     park_factors.main()
 
-    slate = fetch_slate(target)
+    slate, posted = fetch_slate(target)
 
     # Benchmark lines (best-effort; never blocks predictions): morning line
     # for today, last available line for yesterday as the closing capture.
@@ -380,9 +420,9 @@ def main() -> None:
     if slate.empty:
         log.info("no games scheduled for %s", target)
         return
-    projected = _projected_lineups()
-    team_preds = predict_team(slate, target, asof, lineups=projected)
-    batter_preds = predict_batters(slate, target, asof, lineups=projected)
+    game_lineups = _game_lineups(slate, posted, _projected_lineups())
+    team_preds = predict_team(slate, target, asof, lineups=game_lineups)
+    batter_preds = predict_batters(slate, target, asof, lineups=game_lineups)
     summarize(slate, team_preds, batter_preds)
     warnings = team_preds.attrs.get("warnings", []) + batter_preds.attrs.get("warnings", [])
     print(f"\n{'!!! ' + str(len(warnings)) + ' TRIPWIRE WARNINGS' if warnings else 'all sanity checks passed'}")

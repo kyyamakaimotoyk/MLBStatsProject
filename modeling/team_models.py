@@ -16,7 +16,7 @@ layer is a Phase 5 concern once walk-forward says which model ships.
 
 import numpy as np
 import pandas as pd
-from lightgbm import LGBMRegressor
+from lightgbm import LGBMClassifier, LGBMRegressor
 from scipy.stats import norm
 from sklearn.linear_model import LinearRegression
 from xgboost import XGBRegressor
@@ -75,6 +75,27 @@ class RunsModel:
             "pred_margin": margin, "pred_total": home + away,
             "p_home": norm.cdf(margin / self.margin_sigma),
         }, index=test.index)
+
+
+class RunsClsModel(RunsModel):
+    """E1: margins/totals from the runs heads as usual, but win probability
+    from a dedicated binary classifier head instead of Phi(margin/sigma) —
+    Elo predicts probability directly and beats the squashed margin; this
+    lets the trees do the same."""
+
+    def __init__(self, family: str, seed: int = 0):
+        super().__init__(family, seed)
+        self.hyperparams = {**self.hyperparams, "structure": "runs_two_head_cls"}
+
+    def fit(self, train: pd.DataFrame, feats: list[str]) -> None:
+        super().fit(train, feats)
+        self.cls = LGBMClassifier(random_state=self.seed + 2, **LGBM_PARAMS)
+        self.cls.fit(train[feats], (train["TARGET_MARGIN"] > 0).astype(int))
+
+    def predict(self, test: pd.DataFrame, feats: list[str]) -> pd.DataFrame:
+        out = super().predict(test, feats)
+        out["p_home"] = self.cls.predict_proba(test[feats])[:, 1]
+        return out
 
 
 class DirectModel:
@@ -159,6 +180,7 @@ class ConstBaseline:
 
 MODEL_TYPES = {
     "lgbm_runs": lambda seed=0: RunsModel("lgbm", seed),
+    "lgbm_runs_cls": lambda seed=0: RunsClsModel("lgbm", seed),
     "lgbm_direct": lambda seed=0: DirectModel("lgbm", seed),
     "xgb_runs": lambda seed=0: RunsModel("xgb", seed),
     "xgb_direct": lambda seed=0: DirectModel("xgb", seed),

@@ -76,6 +76,50 @@ Elo remains the bar. Next experiments, in order:
 
 ---
 
+## E1-E4 — 2026-07-15 — first experiment round: all rejected, Elo still the bar
+
+**Setup.** New base snapshot `team/v20260715_073434` (adds flag-gated
+UMP_K_FACTOR / WIND_OUT_MPH; window now includes 2026 first half — leakage
+test PASS). Monthly walk-forward, 8,713 regular-season test games 2023-04 ..
+2026-07. Baselines on this window: lgbm_runs .5463 acc / .5662 AUC, elo
+.5539 / .5761. All comparisons paired (validation.ablation).
+
+**E1 — classifier p-head (lgbm_runs_cls). REJECTED, decisively.**
+AUC .5524 vs .5662 for the sigma-squash, bootstrap p<.0001 in the WRONG
+direction. The margin regressor + Phi(margin/sigma) extracts more probability
+signal than a binary head on identical features — binary labels discard the
+margin information. Do not revisit without a different probability design
+(e.g. distributional runs heads).
+
+**E2 — cross-season rolling windows (snapshot v20260715_073718). REJECTED.**
+Directionally worse on every metric (acc .5433 vs .5463, McNemar p=.45; MAE
+p=.18). Carrying October form into April does not help; season-scoped
+windows stay.
+
+**E3 — umpire K factor + out/in wind (flags umpire, wind_out). PARKED.**
+Directionally positive on ALL four metrics (acc +0.4pp p=.18, total MAE
+-.003 p=.25, AUC +.002 p=.19) but nothing clears significance. Flags stay
+off. Revisit inside a dedicated totals model where these features should
+concentrate their effect.
+
+**E4 — slim profile (Elo + SP + park only). NOT SHIPPED, but the key
+diagnostic of the round.** Slim matches full on margin MAE (p=.82), beats it
+directionally on accuracy (.5531 vs .5463, p=.13), and is statistically
+indistinguishable from ELO ITSELF on picks (acc p=.90, AUC p=.12); Elo keeps
+a real margin-MAE edge (p=.03). Slim is significantly worse on totals
+(p=.005), so the full profile stays default. Conclusion: the ~40 team-form /
+bullpen rolling features contribute nothing to win picks — they dilute.
+Future team-model features must carry information Elo doesn't already have
+(lineup/roster strength, travel, framing), not more form aggregates.
+
+**Decision.** Nothing ships. `feature_set_current` -> v20260715_073434
+(extended data + gated columns, default behavior unchanged). Next most
+promising: a dedicated totals model (E3 features + offense blocks, Poisson),
+and lineup-strength features from the Phase 4 batter machinery — the one
+information source the market-adjacent Elo baseline cannot see.
+
+---
+
 ## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
 
 **Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with

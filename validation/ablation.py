@@ -74,17 +74,17 @@ def load_predictions(model_type: str, version: str) -> pd.DataFrame:
     )
 
 
-def compare(model_a: str, model_b: str, version: str) -> None:
-    a = load_predictions(model_a, version)
-    b = load_predictions(model_b, version)
+def compare(model_a: str, model_b: str, version_a: str, version_b: str) -> None:
+    a = load_predictions(model_a, version_a)
+    b = load_predictions(model_b, version_b)
     merged = a.merge(b, on=["game_pk", "actual_margin", "actual_total"],
                      suffixes=("_a", "_b"))
     if merged.empty:
         raise SystemExit("no overlapping predictions; run validation.walkforward first")
     win = (merged["actual_margin"] > 0).to_numpy()
 
-    print(f"=== {model_a} (A) vs {model_b} (B), {len(merged)} shared games, "
-          f"feature set {version} ===")
+    print(f"=== {model_a}@{version_a} (A) vs {model_b}@{version_b} (B), "
+          f"{len(merged)} shared games ===")
     acc = mcnemar_accuracy(win, merged["pred_margin_a"].to_numpy() > 0,
                            merged["pred_margin_b"].to_numpy() > 0)
     print(f"accuracy: A {acc['acc_a']:.4f} vs B {acc['acc_b']:.4f} | "
@@ -107,9 +107,11 @@ def main() -> None:
     ap.add_argument("--a", required=True)
     ap.add_argument("--b", required=True)
     ap.add_argument("--version", default=None, help="defaults to current team feature set")
+    ap.add_argument("--version-a", default=None, help="override snapshot for model A")
+    ap.add_argument("--version-b", default=None, help="override snapshot for model B")
     args = ap.parse_args()
     version = args.version or features_io.current_version("team")
-    compare(args.a, args.b, version)
+    compare(args.a, args.b, args.version_a or version, args.version_b or version)
 
 
 if __name__ == "__main__":

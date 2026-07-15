@@ -37,17 +37,25 @@ def main() -> None:
 
     sql = """
         SELECT p.model_type, p.model_version, p.p_home, p.pred_margin, p.pred_total,
-               o.ml_home, o.ml_away, o.total AS close_total, o.runline_home,
+               c.ml_home, c.ml_away, c.total AS close_total,
+               op.ml_home AS open_ml_home, op.ml_away AS open_ml_away,
+               op.total AS open_total,
                g.home_score, g.away_score, g.game_date
         FROM model_predictions p
         JOIN games g USING (game_pk)
-        JOIN LATERAL (
+        LEFT JOIN LATERAL (
             SELECT * FROM odds_lines o
             WHERE o.game_pk = p.game_pk AND o.is_closing
               AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
             ORDER BY o.captured_at DESC LIMIT 1
-        ) o ON TRUE
-        WHERE g.is_final
+        ) c ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = p.game_pk AND NOT o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) op ON TRUE
+        WHERE g.is_final AND (c.game_pk IS NOT NULL OR op.game_pk IS NOT NULL)
     """
     params = {}
     if args.version:
@@ -58,23 +66,35 @@ def main() -> None:
         print("no overlap between predictions and closing lines yet")
         return
 
-    raw_home = implied_prob(df["ml_home"])
-    raw_away = implied_prob(df["ml_away"])
-    df["market_p_home"] = raw_home / (raw_home + raw_away)
+    def no_vig(home_col, away_col):
+        raw_home = implied_prob(df[home_col])
+        raw_away = implied_prob(df[away_col])
+        return raw_home / (raw_home + raw_away)
+
+    df["p_close"] = no_vig("ml_home", "ml_away")
+    df["p_open"] = no_vig("open_ml_home", "open_ml_away")
     df["margin"] = df["home_score"] - df["away_score"]
     df["total"] = df["home_score"] + df["away_score"]
     df["home_won"] = df["margin"] > 0
 
-    # Archive-corruption guard: pregame MLB win probabilities live in roughly
-    # [0.25, 0.80]; anything outside [0.20, 0.85] is a bad row (e.g. an
-    # in-game line that slipped through) and poisons log loss. Exclude the
-    # game for ALL models so the comparison stays paired.
-    ok = df["market_p_home"].between(0.20, 0.85)
-    dropped = df.loc[~ok, "game_date"].nunique()
-    if (~ok).any():
-        print(f"excluded {(~ok).sum()} rows ({dropped} dates) with implausible "
-              f"market probabilities (archive corruption guard)")
-    df = df[ok]
+    # Corruption guard with open-line fallback: pregame MLB win probabilities
+    # live in roughly [0.25, 0.80]. An implausible closing line (in-game
+    # contamination) falls back to the game's opening line — the ESPN
+    # cross-check showed opens agree with an independent source on the
+    # favorite 93.7% of the time, so a stale line beats no line. Games with
+    # neither line plausible are dropped for all models (paired comparison).
+    close_ok = df["p_close"].between(0.20, 0.85)
+    open_ok = df["p_open"].between(0.20, 0.85)
+    df["market_p_home"] = np.where(close_ok, df["p_close"],
+                                   np.where(open_ok, df["p_open"], np.nan))
+    df["close_total"] = np.where(close_ok, df["close_total"],
+                                 np.where(open_ok, df["open_total"], np.nan))
+    fell_back = int((~close_ok & open_ok).sum())
+    dropped = int(df["market_p_home"].isna().sum())
+    if fell_back or dropped:
+        print(f"corruption guard: {fell_back} rows fell back to the opening "
+              f"line, {dropped} rows dropped (no plausible line)")
+    df = df[df["market_p_home"].notna()]
 
     print(f"=== vs closing line, {df['game_date'].min()} .. {df['game_date'].max()} ===\n")
     rows = []

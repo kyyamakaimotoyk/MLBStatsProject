@@ -39,8 +39,8 @@ def _load_games(max_date):
     sql = """
         SELECT g.game_pk, g.season, g.game_date, g.first_pitch_utc, g.game_type,
                g.home_team_id, g.away_team_id, g.venue_id, g.day_night,
-               g.game_number, g.temp_f, g.wind_speed_mph,
-               g.home_score, g.away_score
+               g.game_number, g.temp_f, g.wind_speed_mph, g.wind_dir,
+               g.hp_umpire_id, g.home_score, g.away_score
         FROM games g
         WHERE g.is_final AND g.home_score IS NOT NULL
     """
@@ -167,20 +167,73 @@ def _window_stats(arr: dict, cut: int, asof) -> dict:
     return row
 
 
-def _team_rolling(team_games: pd.DataFrame) -> dict:
-    """(game_pk, team_id) -> rolling point-in-time stats."""
+def _team_rolling(team_games: pd.DataFrame, cross_season: bool = False) -> dict:
+    """(game_pk, team_id) -> rolling point-in-time stats.
+
+    cross_season=True (experiment E2): windows span season boundaries, so an
+    April L30 pulls late-season form from the prior year instead of NaN.
+    GAME_NUM stays season-scoped either way.
+    """
     out = {}
-    grouped = team_games.sort_values(["game_date", "first_pitch_utc", "game_pk"]).groupby(
-        ["team_id", "season"], sort=False
-    )
-    for (team_id, _season), grp in grouped:
+    tg = team_games.sort_values(["game_date", "first_pitch_utc", "game_pk"]).copy()
+    tg["_game_num"] = tg.groupby(["team_id", "season"]).cumcount() + 1
+    keys = ["team_id"] if cross_season else ["team_id", "season"]
+    for key, grp in tg.groupby(keys, sort=False):
+        team_id = key[0] if isinstance(key, tuple) else key
         g = grp.reset_index(drop=True)
         arr = _group_arrays(g)
         for i in range(len(g)):
             cut = int(np.searchsorted(arr["dates"], arr["dates"][i], side="left"))
             row = _window_stats(arr, cut, arr["dates"][i])
-            row["GAME_NUM"] = i + 1
+            row["GAME_NUM"] = int(g["_game_num"].iat[i])
             out[(g["game_pk"].iat[i], team_id)] = row
+    return out
+
+
+def _ump_factors(max_date) -> dict:
+    """game_pk -> HP umpire strikeout factor (shrunken ump K rate before the
+    game / expanding league K rate). 1.0 for unknown or debut umpires."""
+    sql = """
+        SELECT g.game_pk, g.game_date, g.hp_umpire_id, k.so, k.pa
+        FROM games g
+        JOIN (SELECT game_pk,
+                     COUNT(*) FILTER (WHERE event_type IN
+                         ('strikeout', 'strikeout_double_play')) AS so,
+                     COUNT(*) AS pa
+              FROM plays GROUP BY 1) k USING (game_pk)
+        WHERE g.is_final AND g.hp_umpire_id IS NOT NULL
+    """
+    params = {}
+    if max_date:
+        sql += " AND g.game_date <= :max_date"
+        params["max_date"] = max_date
+    df = pd.read_sql(text(sql), get_engine(), params=params)
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df = df.sort_values(["game_date", "game_pk"]).reset_index(drop=True)
+
+    daily = df.groupby("game_date")[["so", "pa"]].sum()
+    lg_dates = daily.index.to_numpy()
+    lg_so = np.concatenate([[0.0], daily["so"].to_numpy(float).cumsum()])
+    lg_pa = np.concatenate([[0.0], daily["pa"].to_numpy(float).cumsum()])
+
+    out = {}
+    df = df.sort_values(["hp_umpire_id", "game_date", "game_pk"]).reset_index(drop=True)
+    for _, grp in df.groupby("hp_umpire_id", sort=False):
+        g = grp.reset_index(drop=True)
+        dates = g["game_date"].to_numpy()
+        so = np.concatenate([[0.0], g["so"].to_numpy(float).cumsum()])
+        pa = np.concatenate([[0.0], g["pa"].to_numpy(float).cumsum()])
+        for i in range(len(g)):
+            cut = int(np.searchsorted(dates, dates[i], side="left"))
+            li = int(np.searchsorted(lg_dates, dates[i], side="left"))
+            league_rate = lg_so[li] / lg_pa[li] if lg_pa[li] > 5000 else None
+            if league_rate and cut:
+                n_games = cut
+                ump_rate = so[cut] / pa[cut]
+                shrunk = (ump_rate * n_games + league_rate * 30) / (n_games + 30)
+                out[g["game_pk"].iat[i]] = shrunk / league_rate
+            else:
+                out[g["game_pk"].iat[i]] = 1.0
     return out
 
 
@@ -282,11 +335,12 @@ DIFF_COLS = [
 ]
 
 
-def build_features(max_date: str | None = None) -> pd.DataFrame:
+def build_features(max_date: str | None = None, cross_season: bool = False) -> pd.DataFrame:
     games = _load_games(max_date)
     offense = _load_offense(max_date)
     starts = _load_starts(max_date)
     bullpen = _load_bullpen(max_date)
+    ump = _ump_factors(max_date)
     log.info("loaded %d games, %d offense rows, %d starts", len(games), len(offense), len(starts))
 
     # Long frame: one row per team per game, with Statcast offense merged in.
@@ -301,7 +355,7 @@ def build_features(max_date: str | None = None) -> pd.DataFrame:
     team_games = pd.concat(side_rows, ignore_index=True).merge(
         offense, on=["game_pk", "side"], how="left"
     )
-    team_roll = _team_rolling(team_games)
+    team_roll = _team_rolling(team_games, cross_season=cross_season)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
 
@@ -319,6 +373,7 @@ def build_features(max_date: str | None = None) -> pd.DataFrame:
 
     rows = []
     for g in games.itertuples():
+        wd = g.wind_dir if isinstance(g.wind_dir, str) else ""
         row = {
             "game_pk": g.game_pk,
             "game_date": g.game_date.date(),
@@ -330,6 +385,12 @@ def build_features(max_date: str | None = None) -> pd.DataFrame:
             "IS_OPEN_AIR": 1 if roof.get(g.venue_id) == "Open" else 0,
             "IS_NIGHT": 1 if g.day_night == "night" else 0,
             "IS_DOUBLEHEADER_G2": 1 if (g.game_number or 1) > 1 else 0,
+            "UMP_K_FACTOR": ump.get(g.game_pk, 1.0),
+            "WIND_OUT_MPH": (
+                (1 if "Out" in wd else -1 if "In" in wd else 0)
+                * (0 if pd.isna(g.wind_speed_mph) else g.wind_speed_mph)
+                * (1 if roof.get(g.venue_id) == "Open" else 0)
+            ),
             "TARGET_HOME_RUNS": g.home_score,
             "TARGET_AWAY_RUNS": g.away_score,
             "TARGET_MARGIN": g.home_score - g.away_score,
@@ -420,6 +481,9 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str) -> pd.DataFrame:
             "IS_OPEN_AIR": 1 if roof.get(g.venue_id) == "Open" else 0,
             "IS_NIGHT": 1 if g.day_night == "night" else 0,
             "IS_DOUBLEHEADER_G2": 1 if (g.game_number or 1) > 1 else 0,
+            # unknown pregame; flag-gated columns kept for schema consistency
+            "UMP_K_FACTOR": np.nan,
+            "WIND_OUT_MPH": np.nan,
             "ELO_HOME": rh, "ELO_AWAY": ra,
             "ELO_DIFF": rh - ra, "ELO_P_HOME": p_home,
         }
@@ -456,10 +520,11 @@ def main() -> None:
     ap.add_argument("--set-current", action="store_true")
     ap.add_argument("--description", default="")
     ap.add_argument("--max-date", help="truncate all source data (leakage testing)")
+    ap.add_argument("--cross-season", action="store_true", help="E2: windows span seasons")
     args = ap.parse_args()
 
     version = "v" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    df = build_features(max_date=args.max_date)
+    df = build_features(max_date=args.max_date, cross_season=args.cross_season)
     features_io.write_snapshot(df, "team", version, args.description)
     log.info("wrote snapshot team/%s (%d rows)", version, len(df))
     if args.set_current:

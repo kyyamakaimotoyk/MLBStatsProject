@@ -19,29 +19,42 @@ BATTER_META_COLS = ["game_pk", "game_date", "season", "at_bat_index",
                     "batter_id", "pitcher_id", "pitch_hand"]
 
 # flag -> column prefixes it controls. Disabled flags drop matching columns.
+# Flag flips are experiments: they ship only with a tuning-log entry.
 FEATURE_FLAGS: dict[str, bool] = {
-    # "umpire": False,           # HP umpire K/BB tendencies (Phase 3 ablation)
+    "umpire": False,    # E3: HP umpire strikeout tendency (UMP_K_FACTOR)
+    "wind_out": False,  # E3: signed out/in wind component (WIND_OUT_MPH)
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
-    # "umpire": ("UMP_",),
+    "umpire": ("UMP_",),
+    "wind_out": ("WIND_OUT",),
 }
 
 TARGETS = ("team_runs", "margin", "total", "batter_pa")
 
 
-def select_features(columns: list[str], target: str) -> list[str]:
+def select_features(columns: list[str], target: str, profile: str = "full",
+                    enable_flags: tuple[str, ...] = ()) -> list[str]:
     """Return the model-facing feature columns for a target, in stable order.
 
     `columns` is the full column list of a feature-store snapshot; the return
     value is the subset the model for `target` may see. Odds columns never
     appear here — they are benchmark-only by schema and by convention.
+
+    profile 'slim' (experiment E4) keeps only the Elo block, the starting-
+    pitcher blocks, and the park factor. enable_flags force-enables named
+    FEATURE_FLAGS for experiment runs without editing this file.
     """
     if target not in TARGETS:
         raise ValueError(f"Unknown target {target!r}; expected one of {TARGETS}")
     meta = BATTER_META_COLS if target == "batter_pa" else META_COLS
     feats = [c for c in columns if c not in meta and not c.startswith("TARGET_")]
     for flag, enabled in FEATURE_FLAGS.items():
-        if not enabled:
+        if not (enabled or flag in enable_flags):
             prefixes = _FLAG_PREFIXES.get(flag, ())
             feats = [c for c in feats if not c.startswith(prefixes)]
+    if profile == "slim":
+        feats = [c for c in feats
+                 if c.startswith("ELO_") or "_SP_" in c or c == "PARK_PF_RUNS"]
+    elif profile != "full":
+        raise ValueError(f"unknown profile {profile!r}")
     return sorted(feats)

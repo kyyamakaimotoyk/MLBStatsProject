@@ -59,12 +59,18 @@ def _month_starts(start_month: str, last_date) -> list[pd.Timestamp]:
 
 
 def run(model_names: list[str], start_month: str = DEFAULT_START_MONTH,
-        write_preds: bool = True, seed: int = 0) -> pd.DataFrame:
-    version = features_io.current_version("team")
-    df = features_io.read_current("team")
+        write_preds: bool = True, seed: int = 0, version: str | None = None,
+        profile: str = "full", enable_flags: tuple[str, ...] = (),
+        tag: str = "") -> pd.DataFrame:
+    """tag is appended to the stored model_type so experiment variants
+    (profiles, flags, alternate snapshots) coexist in the registry and
+    model_predictions without colliding with the baselines."""
+    version = version or features_io.current_version("team")
+    df = features_io.read_version("team", version)
     # Feature list comes from the pristine snapshot columns — game_type is
     # merged in afterward purely as a test-window filter, never a feature.
-    feats = select_features(list(df.columns), "team_runs")
+    feats = select_features(list(df.columns), "team_runs",
+                            profile=profile, enable_flags=enable_flags)
     game_types = pd.read_sql(text("SELECT game_pk, game_type FROM games"), get_engine())
     df = df.merge(game_types, on="game_pk")
     df["game_date"] = pd.to_datetime(df["game_date"])
@@ -73,6 +79,7 @@ def run(model_names: list[str], start_month: str = DEFAULT_START_MONTH,
 
     summaries = []
     for name in model_names:
+        label = name + tag
         pooled_preds, pooled_actual = [], []
         for month_start in _month_starts(start_month, df["game_date"].max()):
             month_end = month_start + pd.offsets.MonthEnd(0)
@@ -86,7 +93,7 @@ def run(model_names: list[str], start_month: str = DEFAULT_START_MONTH,
             preds = model.predict(test, feats)
             window_metrics = _metrics(test, preds)
             model_registry.log_model_run(
-                model_type=name, target="team", run_kind="walkforward_window",
+                model_type=label, target="team", run_kind="walkforward_window",
                 metrics=window_metrics, hyperparams=model.hyperparams,
                 feature_set_version=version,
                 train_window=(str(train["game_date"].min().date()),
@@ -109,21 +116,22 @@ def run(model_names: list[str], start_month: str = DEFAULT_START_MONTH,
             for season, grp in all_actual.groupby("season")
         }
         model_registry.log_model_run(
-            model_type=name, target="team", run_kind="walkforward_summary",
+            model_type=label, target="team", run_kind="walkforward_summary",
             metrics={**summary, "per_season": per_season},
             hyperparams=make(name, seed=seed).hyperparams, feature_set_version=version,
             train_window=(str(df["game_date"].min().date()), start_month + "-01"),
             test_window=(start_month + "-01", str(df["game_date"].max().date())),
-            notes=f"expanding monthly walk-forward, seed={seed}",
+            notes=f"expanding monthly walk-forward, seed={seed}, "
+                  f"profile={profile}, flags={list(enable_flags)}",
         )
-        summaries.append({"model": name, **summary})
+        summaries.append({"model": label, **summary})
         log.info("%-12s acc %.3f | auc %s | margin MAE %.3f | total MAE %.3f | n=%d",
-                 name, summary["win_acc"],
+                 label, summary["win_acc"],
                  f"{summary.get('win_auc', float('nan')):.3f}",
                  summary["margin_mae"], summary["total_mae"], summary["n_games"])
 
         if write_preds:
-            rows = all_preds.assign(model_type=name, model_version=version)
+            rows = all_preds.assign(model_type=label, model_version=version)
             rows["data_through_date"] = rows["data_through_date"].astype(str)
             with get_engine().begin() as conn:
                 records = rows[["game_pk", "model_type", "model_version",
@@ -161,9 +169,15 @@ def main() -> None:
     ap.add_argument("--start-month", default=DEFAULT_START_MONTH)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-preds", action="store_true")
+    ap.add_argument("--version", default=None, help="snapshot version (default: current)")
+    ap.add_argument("--profile", default="full", help="feature profile (full|slim)")
+    ap.add_argument("--enable-flags", default="", help="comma list of FEATURE_FLAGS to force on")
+    ap.add_argument("--tag", default="", help="suffix appended to stored model_type")
     args = ap.parse_args()
+    flags = tuple(f for f in args.enable_flags.split(",") if f)
     run(args.models.split(","), start_month=args.start_month,
-        write_preds=not args.no_preds, seed=args.seed)
+        write_preds=not args.no_preds, seed=args.seed, version=args.version,
+        profile=args.profile, enable_flags=flags, tag=args.tag)
 
 
 if __name__ == "__main__":

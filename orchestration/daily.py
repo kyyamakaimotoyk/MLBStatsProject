@@ -364,6 +364,16 @@ def main() -> None:
     park_factors.main()
 
     slate = fetch_slate(target)
+
+    # Benchmark lines (best-effort; never blocks predictions): morning line
+    # for today, last available line for yesterday as the closing capture.
+    from ingestion import odds_espn
+    for capture_date, closing in ((target, False), (asof, True)):
+        try:
+            odds_espn.capture(capture_date, closing=closing)
+        except Exception as exc:
+            log.warning("odds capture %s failed: %s", capture_date, exc)
+
     if slate.empty:
         log.info("no games scheduled for %s", target)
         return

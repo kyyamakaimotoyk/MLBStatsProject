@@ -64,7 +64,13 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python -m orchestration.daily              # today
 .venv\Scripts\python -m orchestration.daily --date 2026-07-16 --skip-ingest
 .venv\Scripts\python scripts\track_performance.py        # outcomes vs predictions
+.venv\Scripts\python scripts\benchmark_odds.py           # models vs closing lines
+.venv\Scripts\python -m ingestion.odds_espn --date 2026-07-16   # manual line capture
 ```
+
+Odds are benchmark-only (hard rule): they live in odds_lines and never enter
+a feature snapshot. The daily pipeline captures morning lines for today and
+closing lines for yesterday automatically.
 
 Model bundles live in S3 (`models/team_runs_latest.joblib`,
 `models/batter_pa_latest.joblib`) and retrain automatically when older than

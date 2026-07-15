@@ -46,6 +46,23 @@ runs-two-head/direct (conservative hyperparams), Elo baseline (margin via
 - Totals: no model beats const (p=0.92) — **zero total-runs signal in v1
   features**.
 
+**Vegas benchmark (added 2026-07-15).** Historical consensus closing lines
+imported (archive_sbr, 8,934 games 2022-2025; in-game-contaminated books
+filtered by a 0.15 implied-prob stability rule; 924 corrupt rows excluded by
+a [0.20, 0.85] plausibility guard). On 6,291 paired walk-forward games:
+
+| | win acc | log loss | total MAE |
+|---|---|---|---|
+| closing line (no-vig) | **0.5732** | **0.676** | **3.466** |
+| elo | 0.5633 | 0.680 | 3.554 |
+| lgbm_runs | 0.5508 | 0.691 | 3.553 |
+
+Elo sits within 1.0pp of the closing line on accuracy and 0.004 on log loss —
+a very high floor. The tree models trail the market by ~2.2pp. Market total
+MAE 3.466 confirms the totals gap (~0.09 runs) is real but small. Daily
+morning + closing line capture now runs in the pipeline (espn_daily), so the
+benchmark extends itself going forward.
+
 **Decision.** Honest checkpoint, nothing ships as "better than Elo" yet.
 Elo remains the bar. Next experiments, in order:
 1. E1: p_home head — trees predict margin then squash; Elo predicts probability

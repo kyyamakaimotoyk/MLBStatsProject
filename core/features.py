@@ -25,11 +25,17 @@ FEATURE_FLAGS: dict[str, bool] = {
     "wind_out": False,  # E3: signed out/in wind component (WIND_OUT_MPH)
     "lineup": True,     # E5b SHIPPED 2026-07-15: lineup strength + missing regulars
                         # (margin MAE p=.020, AUC p=.009 vs baseline)
+    "lineup_platoon": False,  # E5c: vs-hand lineup rates against the probable SP
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
     "wind_out": ("WIND_OUT",),
     "lineup": ("HOME_LINEUP_", "AWAY_LINEUP_", "DIFF_LINEUP_"),
+    # more specific than the lineup prefixes: a disabled flag removes its
+    # matches even when the broader lineup flag is enabled
+    "lineup_platoon": ("HOME_LINEUP_VS_HAND", "AWAY_LINEUP_VS_HAND",
+                       "DIFF_LINEUP_VS_HAND", "HOME_LINEUP_SAME_HAND_SHARE",
+                       "AWAY_LINEUP_SAME_HAND_SHARE", "DIFF_LINEUP_SAME_HAND_SHARE"),
 }
 
 TARGETS = ("team_runs", "margin", "total", "batter_pa")

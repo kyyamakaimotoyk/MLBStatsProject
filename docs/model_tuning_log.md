@@ -187,6 +187,23 @@ Queued: E5c platoon-aware lineup rates; consume real lineups when posted.
 
 ---
 
+## E5c — 2026-07-15 — platoon-aware lineup rates: REJECTED (null result)
+
+**Setup.** LINEUP_VS_HAND_WOBA / LINEUP_VS_HAND_DEV (nine's vs-hand rates
+against the opposing probable's throwing hand) + LINEUP_SAME_HAND_SHARE,
+flag lineup_platoon, snapshot v20260715_091625 (114 cols, leakage PASS).
+
+**Result vs shipped E5b config (8,713 paired games).** acc +0.3pp (p=.35),
+margin MAE +.0005 (p=.87), AUC -.0004 (p=.85), total MAE +.002 (p=.62).
+Indistinguishable — the SP handedness features and overall lineup rates
+already carry the platoon information, and W=300 shrinkage leaves the splits
+little independent signal.
+
+**Decision.** Flag stays off. Not worth a multi-seed run on a null this flat.
+Remaining queue: dedicated totals model (parked E3 features), batter B1-B4.
+
+---
+
 ## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
 
 **Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with

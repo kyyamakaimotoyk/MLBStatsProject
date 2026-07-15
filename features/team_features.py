@@ -324,7 +324,9 @@ def _bullpen_lookup(bullpen: pd.DataFrame):
 
 LINEUP_COLS = ["LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE",
                "LINEUP_HR_RATE", "LINEUP_XWOBA_CON", "LINEUP_SAMPLE_PA",
-               "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA", "LINEUP_N_REG_OUT"]
+               "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA", "LINEUP_N_REG_OUT",
+               "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
+               "LINEUP_SAME_HAND_SHARE"]
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
@@ -337,7 +339,8 @@ DIFF_COLS = [
     "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10", "SP_WOBA_AGAINST_L10",
     "LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE", "LINEUP_HR_RATE",
     "LINEUP_XWOBA_CON", "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA",
-    "LINEUP_N_REG_OUT",
+    "LINEUP_N_REG_OUT", "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
+    "LINEUP_SAME_HAND_SHARE",
 ]
 
 # Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
@@ -366,6 +369,9 @@ def _lineup_strength(max_date) -> dict:
     game_dates["game_date"] = pd.to_datetime(game_dates["game_date"])
     b = b.merge(game_dates[["game_pk", "game_date"]], on="game_pk")
     b["woba"] = sum(b[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
+    for h in ("L", "R"):  # E5c: vs-hand lineup wOBA
+        b[f"woba_vs{h}"] = sum(b[f"B_rate_{c}_vs{h}"] * wt
+                               for c, wt in WOBA_WEIGHTS.items())
     # deviation from the expanding league wOBA at that date (E5b)
     lg = {d: float(sum(prior(d)[CLASSES.index(c)] * wt
                        for c, wt in WOBA_WEIGHTS.items()))
@@ -394,6 +400,25 @@ def _lineup_strength(max_date) -> dict:
     df = df.merge(game_dates[["game_pk", "first_pitch_utc"]], on="game_pk")
     df["w"] = df["batting_order"].map(SLOT_PA_WEIGHTS)
 
+    # E5c: the opposing probable's hand per (game, team) and batter handedness
+    players_hand = pd.read_sql(text("SELECT player_id, bats, throws FROM players"),
+                               get_engine())
+    throws_map = players_hand.set_index("player_id")["throws"]
+    bats_map = players_hand.set_index("player_id")["bats"]
+    prob = pd.read_sql(text("""
+        SELECT p.game_pk, g.home_team_id, g.away_team_id,
+               p.home_pitcher_id, p.away_pitcher_id
+        FROM probable_pitchers p JOIN games g USING (game_pk)
+        WHERE p.source = 'backfill'
+    """), get_engine())
+    opp_hand = {}
+    for r in prob.itertuples():
+        if not pd.isna(r.away_pitcher_id):
+            opp_hand[(r.game_pk, r.home_team_id)] = throws_map.get(int(r.away_pitcher_id))
+        if not pd.isna(r.home_pitcher_id):
+            opp_hand[(r.game_pk, r.away_team_id)] = throws_map.get(int(r.home_pitcher_id))
+    df["bats"] = df["player_id"].map(bats_map)
+
     src = {"LINEUP_WOBA": "woba", "LINEUP_K_RATE": "B_rate_K",
            "LINEUP_BB_RATE": "B_rate_BB", "LINEUP_HR_RATE": "B_rate_HR",
            "LINEUP_XWOBA_CON": "B_XWOBA_CON", "LINEUP_SAMPLE_PA": "B_pa"}
@@ -409,6 +434,22 @@ def _lineup_strength(max_date) -> dict:
         dev = grp["woba_dev"].to_numpy(float)
         m = ~np.isnan(dev)
         row["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
+        # E5c: platoon block vs the opposing probable's hand
+        hand = opp_hand.get((game_pk, team_id))
+        if hand in ("L", "R"):
+            v = grp[f"woba_vs{hand}"].to_numpy(float)
+            m = ~np.isnan(v)
+            lg_here = float(grp["game_date"].map(lg).iloc[0])
+            row["LINEUP_VS_HAND_WOBA"] = (float((v[m] * w[m]).sum() / w[m].sum())
+                                          if m.any() else np.nan)
+            row["LINEUP_VS_HAND_DEV"] = (float(((v[m] - lg_here) * w[m]).sum())
+                                         if m.any() else np.nan)
+            same = (grp["bats"] == hand).to_numpy(float)
+            row["LINEUP_SAME_HAND_SHARE"] = float((same * w).sum() / w.sum())
+        else:
+            row["LINEUP_VS_HAND_WOBA"] = np.nan
+            row["LINEUP_VS_HAND_DEV"] = np.nan
+            row["LINEUP_SAME_HAND_SHARE"] = np.nan
         out[(game_pk, team_id)] = row
 
     # E5b missing-regular indicator: regulars = >=60% of the team's previous
@@ -542,7 +583,8 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     return df
 
 
-def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
+def lineup_strength_asof(asof_date: str, projected: pd.DataFrame,
+                         opp_hand: dict | None = None) -> dict:
     """(game_pk, team_id) -> LINEUP_* values for the daily path.
 
     projected columns: game_pk, team_id, player_id, lineup_slot — one lineup
@@ -561,8 +603,14 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
     lg_woba = float(sum(league[c] * wt for c, wt in WOBA_WEIGHTS.items()))
     b = comp["b_rates"].merge(comp["b_sc"], on="batter_id", how="left")
     b["woba"] = sum(b[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
+    for h in ("L", "R"):
+        b[f"woba_vs{h}"] = sum(b[f"B_rate_{c}_vs{h}"] * wt
+                               for c, wt in WOBA_WEIGHTS.items())
     b["woba_dev"] = b["woba"] - lg_woba
     b = b.set_index("batter_id")
+    bats_map = pd.read_sql(text("SELECT player_id, bats FROM players"),
+                           get_engine()).set_index("player_id")["bats"]
+    opp_hand = opp_hand or {}
 
     hist = pd.read_sql(text("""
         SELECT l.team_id, l.game_pk, g.game_date, l.player_id
@@ -585,6 +633,21 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
         dev = rows["woba_dev"].to_numpy(float)
         m = ~np.isnan(dev)
         vals["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
+
+        hand = opp_hand.get((game_pk, team_id))
+        if hand in ("L", "R"):
+            v = rows[f"woba_vs{hand}"].to_numpy(float)
+            m = ~np.isnan(v)
+            vals["LINEUP_VS_HAND_WOBA"] = (float((v[m] * w[m]).sum() / w[m].sum())
+                                           if m.any() else np.nan)
+            vals["LINEUP_VS_HAND_DEV"] = (float(((v[m] - lg_woba) * w[m]).sum())
+                                          if m.any() else np.nan)
+            same = (nine["player_id"].map(bats_map) == hand).to_numpy(float)
+            vals["LINEUP_SAME_HAND_SHARE"] = float((same * w).sum() / w.sum())
+        else:
+            vals["LINEUP_VS_HAND_WOBA"] = np.nan
+            vals["LINEUP_VS_HAND_DEV"] = np.nan
+            vals["LINEUP_SAME_HAND_SHARE"] = np.nan
 
         team_hist = hist[hist["team_id"] == team_id]
         recent = (team_hist.groupby(["game_pk", "game_date"])["player_id"].agg(set)
@@ -641,12 +704,21 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
     team_at = _team_date_lookup(team_games)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
-    lineup_vals = lineup_strength_asof(asof_date, lineups) if lineups is not None else {}
     ratings, last_season = team_rating.current_state(asof_date)
     park = _load_simple("SELECT season, venue_id, pf_runs FROM park_factors") \
         .set_index(["season", "venue_id"])["pf_runs"]
     roof = _load_simple("SELECT venue_id, roof_type FROM venues").set_index("venue_id")["roof_type"]
     throws = _load_simple("SELECT player_id, throws FROM players").set_index("player_id")["throws"]
+
+    lineup_vals = {}
+    if lineups is not None:
+        opp_hand = {}
+        for g in slate.itertuples():
+            if not pd.isna(g.away_probable_id):
+                opp_hand[(g.game_pk, g.home_team_id)] = throws.get(int(g.away_probable_id))
+            if not pd.isna(g.home_probable_id):
+                opp_hand[(g.game_pk, g.away_team_id)] = throws.get(int(g.home_probable_id))
+        lineup_vals = lineup_strength_asof(asof_date, lineups, opp_hand=opp_hand)
 
     rows = []
     for g in slate.itertuples():

@@ -170,6 +170,14 @@ Snapshot v20260715_082809 (105 cols), leakage gate PASS.
   time, though within noise (p=.64); margin MAE and AUC at parity. Elo no
   longer leads on any metric.
 
+**Multi-seed confirmation (added same day).** Reran E5b-vs-baseline at seeds
+1 and 2 (baseline on the lineup-free snapshot v20260715_073434). All 12
+seed x metric comparisons favor lineup2 with consistent magnitudes (margin
+MAE -0.007..-0.011, AUC +0.005..+0.007, acc +0.6..+1.4pp); seed 2 alone
+gives acc McNemar p=.0008 and AUC p=.022. Direction never flips — not seed
+noise. (Known caveats stand: per-comparison p-values, no family-wise
+correction; game independence assumed.)
+
 **Decision.** FEATURE_FLAGS['lineup'] = True. Daily path wired:
 build_prediction_rows takes projected lineups via lineup_strength_asof
 (caveat: projection = last posted lineup until real lineups are consumed, so

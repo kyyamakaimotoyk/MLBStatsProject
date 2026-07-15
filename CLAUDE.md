@@ -56,8 +56,9 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python scripts\test_leakage.py     # must PASS before a snapshot ships
 
 # Modeling:
-.venv\Scripts\python -m validation.walkforward   # all model types, writes registry+preds
+.venv\Scripts\python -m validation.walkforward   # team models, writes registry+preds
 .venv\Scripts\python -m validation.ablation --a lgbm_runs --b elo
+.venv\Scripts\python -m validation.walkforward_batter   # per-PA batter model (long; run detached)
 ```
 
 To retry ledger entries that exhausted their attempts:

@@ -13,6 +13,11 @@ reach the model. Flag flips are experiments and get a tuning-log entry.
 
 from core.features_io import META_COLS
 
+# Meta columns of the per-PA batter frame (features/batter_features.py builds
+# it; it is not snapshotted — see that module's docstring).
+BATTER_META_COLS = ["game_pk", "game_date", "season", "at_bat_index",
+                    "batter_id", "pitcher_id", "pitch_hand"]
+
 # flag -> column prefixes it controls. Disabled flags drop matching columns.
 FEATURE_FLAGS: dict[str, bool] = {
     # "umpire": False,           # HP umpire K/BB tendencies (Phase 3 ablation)
@@ -33,7 +38,8 @@ def select_features(columns: list[str], target: str) -> list[str]:
     """
     if target not in TARGETS:
         raise ValueError(f"Unknown target {target!r}; expected one of {TARGETS}")
-    feats = [c for c in columns if c not in META_COLS and not c.startswith("TARGET_")]
+    meta = BATTER_META_COLS if target == "batter_pa" else META_COLS
+    feats = [c for c in columns if c not in meta and not c.startswith("TARGET_")]
     for flag, enabled in FEATURE_FLAGS.items():
         if not enabled:
             prefixes = _FLAG_PREFIXES.get(flag, ())

@@ -57,3 +57,42 @@ Elo remains the bar. Next experiments, in order:
 4. E4: feature pruning — 69 correlated noisy features may be diluting the
    Elo signal; try Elo + SP block only.
 
+---
+
+## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
+
+**Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with
+shrunken batter/pitcher profiles, platoon splits, arsenal features, and park
+beats the batter's own shrunken marginal rates — i.e., the matchup adds signal.
+
+**Setup.** ~740k PAs 2022-2025 (features/batter_features.py; EB shrinkage
+W=150 overall / 300 splits; B window 60 games, P window 30). LightGBM
+multiclass (300 trees). Season-level walk-forward: train < S, test S.
+Game-level eval on regular-season games where the announced probable started;
+mixing weight w = league SP PA share; PA counts from empirical slot
+distributions. Baseline = batter shrunken marginals aggregated identically.
+
+**Result — per-PA log loss (model | batter-marginal | league):**
+- 2023 (train 2022 only): 1.4949 | **1.4920** | 1.5049 — model LOSES
+- 2024 (train 22-23):     **1.4682** | 1.4738 | 1.4855 — model wins
+- 2025 (train 22-24):     **1.4643** | 1.4731 | 1.4858 — model wins, gap grows
+
+Monotone in training data: the matchup features need 2+ seasons to pay off.
+
+**Game-level (2025, MAE model vs baseline):** H 0.684 vs 0.686, TB 1.349 vs
+1.351, HR 0.2172 vs 0.2177, BB **0.457 vs 0.469** (largest edge, all 3
+seasons), K 0.671 vs **0.666** (model loses on K all 3 seasons).
+
+**Calibration (pooled 130,950 batter-games):** P(>=1 hit) and P(>=1 HR)
+well-calibrated through decile 8; top decile overconfident (p_hr pred 0.226
+vs obs 0.188). Ranking power: top p_hr decile homers at 18.8% vs 5.4% for
+bottom.
+
+**Decision.** Ships as pa_v1 (predictions in batter_predictions). Queued:
+- B1: per-SP workload share for the mixing weight w (openers vs workhorses).
+- B2: K anomaly — model trails shrunken marginals on strikeouts every season;
+  test dropping arsenal features from the K head or longer batter K windows.
+- B3: isotonic calibration on the probability heads (top-decile overconfidence).
+- B4: batter per-pitch-type profile x pitcher arsenal crossing (the full
+  arsenal-matchup idea; v1 only has aggregate arsenal features).
+

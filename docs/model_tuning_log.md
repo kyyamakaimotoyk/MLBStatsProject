@@ -263,3 +263,34 @@ bottom.
 - B4: batter per-pitch-type profile x pitcher arsenal crossing (the full
   arsenal-matchup idea; v1 only has aggregate arsenal features).
 
+---
+
+## B1-B4 — 2026-07-15 — batter experiment round: B2 ships, rest rejected/parked
+
+**Method.** B1/B2/B3 are aggregation/calibration variants evaluated in ONE
+walk-forward pass against the same trained models — paired by construction
+on 130,950 batter-games; B4 trains with/without models per season
+(--b4-compare). All verdicts replicated across two independent runs.
+
+**B1 — per-SP workload share for the mixing weight w: REJECTED (significantly
+worse).** Hits MAE 0.6851 vs 0.6850, K MAE 0.6784 vs 0.6782, both p<.01 in
+the WRONG direction: the per-SP IP/9 estimate is noisier than the league
+constant it replaces.
+
+**B2 — K probability blended halfway to the batter marginal: SHIPPED.**
+K MAE 0.6721 vs 0.6782 (p<.0001) — closes the strikeout anomaly tracked
+since B0 (the PA model over-trusts matchup K signal). Shipped as
+batter_model.blend_k in the daily aggregation; stored pa_v1 walk-forward
+preds are pre-blend, the harness reports the blend variant explicitly.
+
+**B3 — isotonic calibration of p_hit/p_hr on the prior season: PARKED.**
+Brier deltas ~5e-5, p=.15-.35. Top-decile overconfidence is real but too
+small and season-drifty for a prior-season calibrator. Revisit as seasons
+accumulate; never ship a calibrator without demonstrated benefit (NBA E13
+lesson).
+
+**B4 — per-pitch-class quality x pitcher mix (B_XWOBA_F/B/O,
+B_ARSENAL_MATCH): PARKED.** Per-PA log loss 1.47543 vs 1.47562 (p=.22),
+hits MAE p=.22, K MAE p=.97. Direction mildly positive; columns stay in the
+builder behind flag arsenal_cross (off).
+

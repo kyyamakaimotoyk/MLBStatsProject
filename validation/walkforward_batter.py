@@ -20,6 +20,8 @@ import logging
 
 import numpy as np
 import pandas as pd
+from scipy.stats import ttest_rel
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import log_loss
 from sqlalchemy import text
 
@@ -94,7 +96,11 @@ def _load_game_side_data():
 # with the daily pipeline so the two paths can never drift.
 
 
-def run(seed: int = 0, write_preds: bool = True) -> None:
+B4_COLS = ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH")
+
+
+def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
+        b4_compare: bool = False) -> None:
     comp = bf.build()
     pa = comp["pa"]
     feats = select_features(list(pa.columns), "batter_pa")
@@ -105,6 +111,24 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
     starters = pd.read_sql(text(
         "SELECT game_pk, player_id FROM pitcher_game_lines WHERE is_starter"), get_engine())
     starter_keys = set(zip(starters["game_pk"], starters["player_id"]))
+
+    # B1: per-SP workload share from the team-features SP lookup
+    from features.team_features import _load_starts, _sp_lookup
+    sp_look = _sp_lookup(_load_starts(None))
+
+    def sp_share(sp_id, date64, fallback: float) -> float:
+        d = sp_look(int(sp_id), date64)
+        ip = d.get("SP_IP_PER_START_L10", np.nan)
+        return fallback if ip is None or np.isnan(ip) else float(np.clip(ip / 9.0, 0.40, 0.85))
+
+    # pooled per-batter-game abs errors for paired tests across variants
+    pooled: dict[str, list] = {k: [] for k in
+                               ("base_h", "base_k", "b1_h", "b1_k", "b2_k",
+                                "hit1", "hr1", "p_hit", "p_hr",
+                                "p_hit_cal", "p_hr_cal",
+                                "b4_ll", "nob4_ll", "nob4_h", "nob4_k")}
+    calib_hist = {"p_hit": [], "p_hr": [], "hit1": [], "hr1": []}
+    feats_nob4 = [c for c in feats if c not in B4_COLS]
 
     for season in TEST_SEASONS:
         train = pa[pa["season"] < season]
@@ -157,9 +181,76 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
         agg = bm.aggregate_game(p_mix, pa_dist)
         agg_base = bm.aggregate_game(p_base, pa_dist)
 
+        # ---- B1: per-SP workload share instead of the league constant
+        p_sp = model.predict_proba(vs_sp, feats)
+        p_lg = model.predict_proba(vs_lg, feats)
+        w_sp = np.array([sp_share(s, d.to_datetime64(), w)
+                         for s, d in zip(eligible["sp_id"], eligible["game_date"])])
+        agg_b1 = bm.aggregate_game(w_sp[:, None] * p_sp + (1 - w_sp[:, None]) * p_lg,
+                                   pa_dist)
+
+        # ---- B2: blend the K probability halfway back to the batter marginal
+        i_k = CLASSES.index("K")
+        p_b2 = p_mix.copy()
+        k_blend = 0.5 * p_mix[:, i_k] + 0.5 * p_base[:, i_k]
+        scale = (1 - k_blend) / np.clip(1 - p_mix[:, i_k], 1e-9, None)
+        p_b2 *= scale[:, None]
+        p_b2[:, i_k] = k_blend
+        agg_b2 = bm.aggregate_game(p_b2, pa_dist)
+
+        # ---- B3: isotonic calibration of the probability heads, fit on the
+        # PREVIOUS test season's predictions (walk-forward safe)
+        cal = {}
+        for head, key_p, key_y in (("p_hit", "p_hit", "hit1"), ("p_hr", "p_hr", "hr1")):
+            if calib_hist[key_p]:
+                iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+                iso.fit(np.concatenate(calib_hist[key_p]), np.concatenate(calib_hist[key_y]))
+                cal[head] = iso.predict(agg[head])
+            else:
+                cal[head] = agg[head]
+
+        actual_h = eligible["h"].to_numpy(float)
+        actual_k = eligible["k"].to_numpy(float)
+        hit1 = (actual_h >= 1).astype(float)
+        hr1 = (eligible["hr"].to_numpy(float) >= 1).astype(float)
+        pooled["base_h"].append(np.abs(actual_h - agg["exp_h"]))
+        pooled["base_k"].append(np.abs(actual_k - agg["exp_k"]))
+        pooled["b1_h"].append(np.abs(actual_h - agg_b1["exp_h"]))
+        pooled["b1_k"].append(np.abs(actual_k - agg_b1["exp_k"]))
+        pooled["b2_k"].append(np.abs(actual_k - agg_b2["exp_k"]))
+        pooled["hit1"].append(hit1)
+        pooled["hr1"].append(hr1)
+        pooled["p_hit"].append(agg["p_hit"])
+        pooled["p_hr"].append(agg["p_hr"])
+        pooled["p_hit_cal"].append(cal["p_hit"])
+        pooled["p_hr_cal"].append(cal["p_hr"])
+        calib_hist["p_hit"].append(agg["p_hit"])
+        calib_hist["p_hr"].append(agg["p_hr"])
+        calib_hist["hit1"].append(hit1)
+        calib_hist["hr1"].append(hr1)
+
+        # ---- B4: paired comparison against a model WITHOUT the arsenal cols
+        if b4_compare:
+            model_nob4 = bm.BatterPAModel(seed=seed)
+            model_nob4.fit(train, feats_nob4)
+            y_idx = np.arange(len(test))
+            probs_nob4 = model_nob4.predict_proba(test, feats_nob4)
+            pooled["b4_ll"].append(-np.log(np.clip(probs[y_idx, y], 1e-12, None)))
+            pooled["nob4_ll"].append(-np.log(np.clip(probs_nob4[y_idx, y], 1e-12, None)))
+            p_mix_n = (w * model_nob4.predict_proba(vs_sp, feats_nob4)
+                       + (1 - w) * model_nob4.predict_proba(vs_lg, feats_nob4))
+            agg_n = bm.aggregate_game(p_mix_n, pa_dist)
+            pooled["nob4_h"].append(np.abs(actual_h - agg_n["exp_h"]))
+            pooled["nob4_k"].append(np.abs(actual_k - agg_n["exp_k"]))
+
         metrics = {"n_pa_test": int(len(test)), "n_batter_games": int(len(eligible)),
                    "ll_model": ll_model, "ll_marginal": ll_marginal, "ll_league": ll_league,
-                   "sp_pa_share_w": float(w)}
+                   "sp_pa_share_w": float(w),
+                   "mae_h_b1": float(np.mean(np.abs(actual_h - agg_b1["exp_h"]))),
+                   "mae_k_b1": float(np.mean(np.abs(actual_k - agg_b1["exp_k"]))),
+                   "mae_k_b2": float(np.mean(np.abs(actual_k - agg_b2["exp_k"]))),
+                   "brier_p_hit_cal": float(np.mean((cal["p_hit"] - hit1) ** 2)),
+                   "brier_p_hr_cal": float(np.mean((cal["p_hr"] - hr1) ** 2))}
         for stat in ("h", "tb", "hr", "bb", "k"):
             actual = eligible[stat].to_numpy(float)
             metrics[f"mae_{stat}"] = float(np.mean(np.abs(actual - agg[f"exp_{stat}"])))
@@ -176,7 +267,7 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
         model_registry.log_model_run(
             model_type="lgbm_pa", target="batter", run_kind="walkforward_window",
             metrics=metrics, hyperparams=bm.LGBM_PA_PARAMS,
-            feature_set_version=MODEL_VERSION,
+            feature_set_version=version,
             train_window=(str(train["game_date"].min().date()),
                           str(train["game_date"].max().date())),
             test_window=(f"{season}-01-01", f"{season}-12-31"),
@@ -185,7 +276,7 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
 
         if write_preds:
             rows = eligible[["game_pk", "player_id", "sp_id", "lineup_slot"]].copy()
-            rows["model_version"] = MODEL_VERSION
+            rows["model_version"] = version
             rows["data_through_date"] = (eligible["game_date"]
                                          - pd.Timedelta(days=1)).dt.date.astype(str)
             for k in ("exp_pa", "exp_h", "exp_tb", "exp_hr", "exp_bb", "exp_k",
@@ -215,14 +306,45 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
                     conn.execute(insert, records[i : i + 2000])
             log.info("wrote %d batter predictions for %d", len(records), season)
 
+    # ---- pooled paired verdicts (B1/B2/B3), all seasons together
+    P = {k: np.concatenate(v) for k, v in pooled.items() if v}
+    print("\n=== B1/B2/B3 pooled paired verdicts "
+          f"({len(P['base_h'])} batter-games, 2023-2025) ===")
+    for label, a_key, b_key in (("B1 per-SP w, hits MAE", "b1_h", "base_h"),
+                                ("B1 per-SP w, K MAE", "b1_k", "base_k"),
+                                ("B2 K-blend, K MAE", "b2_k", "base_k")):
+        t = ttest_rel(P[a_key], P[b_key])
+        print(f"  {label}: {P[a_key].mean():.4f} vs {P[b_key].mean():.4f} "
+              f"| paired-t p={t.pvalue:.4f}")
+    for head, y_key in (("p_hit", "hit1"), ("p_hr", "hr1")):
+        raw = np.mean((P[head] - P[y_key]) ** 2)
+        calb = np.mean((P[f"{head}_cal"] - P[y_key]) ** 2)
+        t = ttest_rel((P[f"{head}_cal"] - P[y_key]) ** 2, (P[head] - P[y_key]) ** 2)
+        print(f"  B3 isotonic, Brier {head}: {calb:.5f} vs {raw:.5f} "
+              f"| paired-t p={t.pvalue:.4f} (2023 uncalibrated either way)")
+    if pooled["b4_ll"] and pooled["b4_ll"][0] is not None and len(pooled["b4_ll"]):
+        ll_a, ll_b = np.concatenate(pooled["b4_ll"]), np.concatenate(pooled["nob4_ll"])
+        t = ttest_rel(ll_a, ll_b)
+        print(f"  B4 arsenal cross, per-PA log loss: {ll_a.mean():.5f} (with) vs "
+              f"{ll_b.mean():.5f} (without) | paired-t p={t.pvalue:.4f}")
+        for label, a_key, b_key in (("B4 hits MAE", "base_h", "nob4_h"),
+                                    ("B4 K MAE", "base_k", "nob4_k")):
+            t = ttest_rel(P[a_key], P[b_key])
+            print(f"  {label}: {P[a_key].mean():.4f} (with) vs {P[b_key].mean():.4f} "
+                  f"(without) | paired-t p={t.pvalue:.4f}")
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-preds", action="store_true")
+    ap.add_argument("--version", default=MODEL_VERSION, help="model_version for stored preds")
+    ap.add_argument("--b4-compare", action="store_true",
+                    help="also train a no-arsenal model per season for paired B4 tests")
     args = ap.parse_args()
-    run(seed=args.seed, write_preds=not args.no_preds)
+    run(seed=args.seed, write_preds=not args.no_preds, version=args.version,
+        b4_compare=args.b4_compare)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ FEATURE_FLAGS: dict[str, bool] = {
     "lineup": True,     # E5b SHIPPED 2026-07-15: lineup strength + missing regulars
                         # (margin MAE p=.020, AUC p=.009 vs baseline)
     "lineup_platoon": False,  # E5c: vs-hand lineup rates against the probable SP
+    "arsenal_cross": False,   # B4: per-pitch-class quality x pitcher mix (parked)
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
@@ -36,6 +37,7 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "lineup_platoon": ("HOME_LINEUP_VS_HAND", "AWAY_LINEUP_VS_HAND",
                        "DIFF_LINEUP_VS_HAND", "HOME_LINEUP_SAME_HAND_SHARE",
                        "AWAY_LINEUP_SAME_HAND_SHARE", "DIFF_LINEUP_SAME_HAND_SHARE"),
+    "arsenal_cross": ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_"),
 }
 
 TARGETS = ("team_runs", "margin", "total", "batter_pa")

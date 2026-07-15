@@ -331,6 +331,8 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
         p_sp = bundle["model"].predict_proba(vs_sp, feats)
         w = bundle["w"]
         probs[has_sp] = w * p_sp + (1 - w) * p_lg[has_sp]
+    # B2 (shipped): K probability blended back toward the batter marginal
+    probs = bm.blend_k(probs, bm.marginal_probs(vs_lg))
 
     dist = bm.pa_lookup(bundle["pa_dists"])(frame["lineup_slot"].to_numpy(),
                                             frame["is_home"].to_numpy())

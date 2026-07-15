@@ -94,9 +94,28 @@ def assemble_matchup(rows: pd.DataFrame, comp: dict, league_row: dict | None,
         df["SAME_HAND"] = league_row["same_hand_mean"]
 
     df["B_PA_N"] = df["B_pa"]
+    # B4 cross — pitcher mix columns exist in both branches by this point
+    fb_share = 1.0 - df["P_BREAKING_PCT"] - df["P_OFFSPEED_PCT"]
+    df["B_ARSENAL_MATCH"] = (fb_share * df["B_XWOBA_F"]
+                             + df["P_BREAKING_PCT"] * df["B_XWOBA_B"]
+                             + df["P_OFFSPEED_PCT"] * df["B_XWOBA_O"])
     df["IS_HOME"] = df["is_home"].astype(int)
     df["PARK_PF_RUNS"] = df["pf_runs"].fillna(1.0)
     return df
+
+
+def blend_k(probs: np.ndarray, marginal: np.ndarray, alpha: float = 0.5) -> np.ndarray:
+    """B2 (SHIPPED): the PA model over-trusts matchup strikeout signal —
+    blending the K probability halfway back to the batter's own marginal cut
+    K MAE 0.678 -> 0.672 (p<.0001, 131k paired batter-games). Other classes
+    rescale proportionally so rows still sum to 1."""
+    out = probs.copy()
+    k = CLASSES.index("K")
+    k_new = alpha * probs[:, k] + (1 - alpha) * marginal[:, k]
+    scale = (1 - k_new) / np.clip(1 - probs[:, k], 1e-9, None)
+    out *= scale[:, None]
+    out[:, k] = k_new
+    return out
 
 
 def marginal_probs(frame: pd.DataFrame) -> np.ndarray:

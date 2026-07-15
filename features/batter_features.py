@@ -164,20 +164,45 @@ def _rolling_rates(per_game: pd.DataFrame, player_col: str, window: int,
                          "game_pk": per_game["game_pk"].to_numpy(), **out})
 
 
+# batter contact-quality ratios, overall + per pitch class (B4)
+BATTER_SC_RATIOS = {
+    "B_XWOBA_CON": ("xwoba_num", "bbe"),
+    "B_XWOBA_F": ("xf_num", "xf_n"),
+    "B_XWOBA_B": ("xb_num", "xb_n"),
+    "B_XWOBA_O": ("xo_num", "xo_n"),
+}
+
+
 def _batter_statcast(max_date):
+    from sqlalchemy import bindparam
+
     sql = """
         SELECT s.batter_id, s.game_pk, g.game_date,
                SUM(s.estimated_woba_using_speedangle::float8) AS xwoba_num,
-               COUNT(s.estimated_woba_using_speedangle) AS bbe
+               COUNT(s.estimated_woba_using_speedangle) AS bbe,
+               SUM(s.estimated_woba_using_speedangle::float8)
+                   FILTER (WHERE s.pitch_type IN :fb) AS xf_num,
+               COUNT(s.estimated_woba_using_speedangle)
+                   FILTER (WHERE s.pitch_type IN :fb) AS xf_n,
+               SUM(s.estimated_woba_using_speedangle::float8)
+                   FILTER (WHERE s.pitch_type IN :brk) AS xb_num,
+               COUNT(s.estimated_woba_using_speedangle)
+                   FILTER (WHERE s.pitch_type IN :brk) AS xb_n,
+               SUM(s.estimated_woba_using_speedangle::float8)
+                   FILTER (WHERE s.pitch_type IN :off) AS xo_num,
+               COUNT(s.estimated_woba_using_speedangle)
+                   FILTER (WHERE s.pitch_type IN :off) AS xo_n
         FROM statcast_pitches s JOIN games g USING (game_pk)
         WHERE g.is_final
     """
-    params = {}
+    params = {"fb": list(FASTBALLS), "brk": list(BREAKING), "off": list(OFFSPEED)}
     if max_date:
         sql += " AND g.game_date <= :max_date"
         params["max_date"] = max_date
     sql += " GROUP BY 1, 2, 3"
-    df = pd.read_sql(text(sql), get_engine(), params=params)
+    stmt = text(sql).bindparams(*[bindparam(k, expanding=True)
+                                  for k in ("fb", "brk", "off")])
+    df = pd.read_sql(stmt, get_engine(), params=params)
     df["game_date"] = pd.to_datetime(df["game_date"])
     return df.sort_values(["batter_id", "game_date", "game_pk"]).reset_index(drop=True)
 
@@ -255,7 +280,7 @@ def build(max_date: str | None = None) -> dict:
 
     log.info("statcast quality blocks ...")
     b_sc = _rolling_ratio_lookup(_batter_statcast(max_date), "batter_id", B_WINDOW,
-                                 {"B_XWOBA_CON": ("xwoba_num", "bbe")})
+                                 BATTER_SC_RATIOS)
     ars = _rolling_ratio_lookup(
         _pitcher_arsenal(max_date), "pitcher_id", P_WINDOW,
         {"P_FB_VELO": ("fb_velo_sum", "fb_n"),
@@ -289,6 +314,11 @@ def build(max_date: str | None = None) -> dict:
         frame[f"P_RATE_{c}"] = frame[f"P_rate_{c}"]
     frame["B_PA_N"] = frame["B_pa"]
     frame["P_BF_N"] = frame["P_pa"]
+    # B4: batter's per-pitch-class quality crossed with this pitcher's mix
+    fb_share = 1.0 - frame["P_BREAKING_PCT"] - frame["P_OFFSPEED_PCT"]
+    frame["B_ARSENAL_MATCH"] = (fb_share * frame["B_XWOBA_F"]
+                                + frame["P_BREAKING_PCT"] * frame["B_XWOBA_B"]
+                                + frame["P_OFFSPEED_PCT"] * frame["B_XWOBA_O"])
     frame["SAME_HAND"] = (frame["bat_side"] == frame["pitch_hand"]).astype(int)
     frame["IS_HOME"] = frame["is_home_batter"].astype(int)
     frame["PARK_PF_RUNS"] = frame["pf_runs"].fillna(1.0)
@@ -344,7 +374,7 @@ def build_asof(asof_date: str) -> dict:
                     "pitcher_id", P_WINDOW, league)
     p = p.add_prefix("P_").rename(columns={"P_pitcher_id": "pitcher_id"})
     b_sc = _asof_ratios(_batter_statcast(asof_date), "batter_id", B_WINDOW,
-                        {"B_XWOBA_CON": ("xwoba_num", "bbe")})
+                        BATTER_SC_RATIOS)
     ars = _asof_ratios(_pitcher_arsenal(asof_date), "pitcher_id", P_WINDOW,
                        {"P_FB_VELO": ("fb_velo_sum", "fb_n"),
                         "P_BREAKING_PCT": ("breaking_n", "pitches"),
@@ -360,6 +390,7 @@ def feature_columns() -> list[str]:
     cols = [f"B_RATE_{c}" for c in CLASSES] + [f"B_RATE_{c}_VS_HAND" for c in CLASSES]
     cols += [f"P_RATE_{c}" for c in CLASSES] + [f"P_RATE_{c}_VS_SIDE" for c in CLASSES]
     cols += ["B_PA_N", "B_PA_VS_HAND", "B_XWOBA_CON",
+             "B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH",
              "P_BF_N", "P_BF_VS_SIDE",
              "P_FB_VELO", "P_BREAKING_PCT", "P_OFFSPEED_PCT", "P_WHIFF_RATE",
              "SAME_HAND", "IS_HOME", "PARK_PF_RUNS"]

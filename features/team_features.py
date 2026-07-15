@@ -134,6 +134,39 @@ TEAM_ROLL_COLS = [
 ]
 
 
+def _group_arrays(g: pd.DataFrame) -> dict:
+    return {
+        "dates": g["game_date"].to_numpy(),
+        "rf": g["runs_for"].to_numpy(float),
+        "ra": g["runs_against"].to_numpy(float),
+        "nums": {c: g[c].fillna(0).to_numpy(float)
+                 for c in ("woba_num", "woba_den", "xwoba_num", "bbe", "so", "bb", "pa")},
+    }
+
+
+def _window_stats(arr: dict, cut: int, asof) -> dict:
+    """Rolling stats over games strictly before position `cut` (all games on
+    dates < asof). Single implementation shared by the historical build and
+    the prediction path so the two can never drift."""
+    row = {"N_PRIOR_GAMES": cut}
+    if cut > 0:
+        dates, rf, ra, nums = arr["dates"], arr["rf"], arr["ra"], arr["nums"]
+        lo10, lo30 = max(0, cut - 10), max(0, cut - 30)
+        row["RUNS_PG_L10"] = rf[lo10:cut].mean()
+        row["RUNS_PG_L30"] = rf[lo30:cut].mean()
+        row["RA_PG_L10"] = ra[lo10:cut].mean()
+        row["RA_PG_L30"] = ra[lo30:cut].mean()
+        wd = nums["woba_den"][lo30:cut].sum()
+        row["WOBA_L30"] = nums["woba_num"][lo30:cut].sum() / wd if wd else np.nan
+        be = nums["bbe"][lo30:cut].sum()
+        row["XWOBA_CON_L30"] = nums["xwoba_num"][lo30:cut].sum() / be if be else np.nan
+        pa = nums["pa"][lo30:cut].sum()
+        row["K_PCT_L30"] = nums["so"][lo30:cut].sum() / pa if pa else np.nan
+        row["BB_PCT_L30"] = nums["bb"][lo30:cut].sum() / pa if pa else np.nan
+        row["REST_DAYS"] = min(float((asof - dates[cut - 1]) / DAY), 10.0)
+    return row
+
+
 def _team_rolling(team_games: pd.DataFrame) -> dict:
     """(game_pk, team_id) -> rolling point-in-time stats."""
     out = {}
@@ -142,30 +175,34 @@ def _team_rolling(team_games: pd.DataFrame) -> dict:
     )
     for (team_id, _season), grp in grouped:
         g = grp.reset_index(drop=True)
-        dates = g["game_date"].to_numpy()
-        rf = g["runs_for"].to_numpy(float)
-        ra = g["runs_against"].to_numpy(float)
-        nums = {c: g[c].fillna(0).to_numpy(float)
-                for c in ("woba_num", "woba_den", "xwoba_num", "bbe", "so", "bb", "pa")}
+        arr = _group_arrays(g)
         for i in range(len(g)):
-            cut = int(np.searchsorted(dates, dates[i], side="left"))
-            row = {"N_PRIOR_GAMES": cut, "GAME_NUM": i + 1}
-            if cut > 0:
-                lo10, lo30 = max(0, cut - 10), max(0, cut - 30)
-                row["RUNS_PG_L10"] = rf[lo10:cut].mean()
-                row["RUNS_PG_L30"] = rf[lo30:cut].mean()
-                row["RA_PG_L10"] = ra[lo10:cut].mean()
-                row["RA_PG_L30"] = ra[lo30:cut].mean()
-                wd = nums["woba_den"][lo30:cut].sum()
-                row["WOBA_L30"] = nums["woba_num"][lo30:cut].sum() / wd if wd else np.nan
-                be = nums["bbe"][lo30:cut].sum()
-                row["XWOBA_CON_L30"] = nums["xwoba_num"][lo30:cut].sum() / be if be else np.nan
-                pa = nums["pa"][lo30:cut].sum()
-                row["K_PCT_L30"] = nums["so"][lo30:cut].sum() / pa if pa else np.nan
-                row["BB_PCT_L30"] = nums["bb"][lo30:cut].sum() / pa if pa else np.nan
-                row["REST_DAYS"] = min(float((dates[i] - dates[cut - 1]) / DAY), 10.0)
+            cut = int(np.searchsorted(arr["dates"], arr["dates"][i], side="left"))
+            row = _window_stats(arr, cut, arr["dates"][i])
+            row["GAME_NUM"] = i + 1
             out[(g["game_pk"].iat[i], team_id)] = row
     return out
+
+
+def _team_date_lookup(team_games: pd.DataFrame):
+    """(team_id, season, date) -> the same rolling stats, for UNPLAYED games."""
+    book = {}
+    grouped = team_games.sort_values(["game_date", "first_pitch_utc", "game_pk"]).groupby(
+        ["team_id", "season"], sort=False
+    )
+    for (team_id, season), grp in grouped:
+        book[(team_id, season)] = _group_arrays(grp.reset_index(drop=True))
+
+    def lookup(team_id, season, date64) -> dict:
+        arr = book.get((team_id, season))
+        if arr is None:
+            return {"N_PRIOR_GAMES": 0, "GAME_NUM": 1}
+        cut = int(np.searchsorted(arr["dates"], date64, side="left"))
+        row = _window_stats(arr, cut, date64)
+        row["GAME_NUM"] = cut + 1
+        return row
+
+    return lookup
 
 
 def _sp_lookup(starts: pd.DataFrame):
@@ -329,6 +366,87 @@ def build_features(max_date: str | None = None) -> pd.DataFrame:
     log.info("built %d rows x %d cols; NaN rate %.1f%%",
              len(df), df.shape[1],
              100 * df.isna().to_numpy().mean())
+    return df
+
+
+def build_prediction_rows(slate: pd.DataFrame, asof_date: str) -> pd.DataFrame:
+    """Feature rows for UNPLAYED games, using only data through asof_date.
+
+    slate columns: game_pk, game_date, season, home_team_id, away_team_id,
+    venue_id, day_night, game_number, home_probable_id, away_probable_id.
+    Weather is unknown pregame and left NaN (forecast integration is a queued
+    upgrade); everything else matches build_features() column-for-column.
+    """
+    from features import team_rating
+
+    offense = _load_offense(asof_date)
+    starts = _load_starts(asof_date)
+    bullpen = _load_bullpen(asof_date)
+    games = _load_games(asof_date)
+
+    side_rows = []
+    for side in ("home", "away"):
+        part = games[["game_pk", "season", "game_date", "first_pitch_utc"]].copy()
+        part["team_id"] = games[f"{side}_team_id"]
+        part["runs_for"] = games[f"{side}_score"]
+        part["runs_against"] = games["away_score" if side == "home" else "home_score"]
+        part["side"] = side
+        side_rows.append(part)
+    team_games = pd.concat(side_rows, ignore_index=True).merge(
+        offense, on=["game_pk", "side"], how="left")
+
+    team_at = _team_date_lookup(team_games)
+    sp = _sp_lookup(starts)
+    bp = _bullpen_lookup(bullpen)
+    ratings, last_season = team_rating.current_state(asof_date)
+    park = _load_simple("SELECT season, venue_id, pf_runs FROM park_factors") \
+        .set_index(["season", "venue_id"])["pf_runs"]
+    roof = _load_simple("SELECT venue_id, roof_type FROM venues").set_index("venue_id")["roof_type"]
+    throws = _load_simple("SELECT player_id, throws FROM players").set_index("player_id")["throws"]
+
+    rows = []
+    for g in slate.itertuples():
+        game_date = pd.Timestamp(g.game_date)
+        rh, ra, p_home = team_rating.pregame(ratings, last_season,
+                                             g.home_team_id, g.away_team_id, g.season)
+        row = {
+            "game_pk": g.game_pk,
+            "game_date": game_date.date(),
+            "season": g.season,
+            "data_through_date": pd.Timestamp(asof_date).date(),
+            "PARK_PF_RUNS": float(park.get((g.season, g.venue_id), 1.0)),
+            "TEMP_F": np.nan,
+            "WIND_SPEED_MPH": np.nan,
+            "IS_OPEN_AIR": 1 if roof.get(g.venue_id) == "Open" else 0,
+            "IS_NIGHT": 1 if g.day_night == "night" else 0,
+            "IS_DOUBLEHEADER_G2": 1 if (g.game_number or 1) > 1 else 0,
+            "ELO_HOME": rh, "ELO_AWAY": ra,
+            "ELO_DIFF": rh - ra, "ELO_P_HOME": p_home,
+        }
+        for side in ("home", "away"):
+            prefix = side.upper() + "_"
+            team_id = g.home_team_id if side == "home" else g.away_team_id
+            side_vals = team_at(team_id, g.season, game_date.to_datetime64())
+            side_vals.update(bp(team_id, game_date.to_datetime64()))
+            pid = getattr(g, f"{side}_probable_id")
+            if pid is not None and not pd.isna(pid):
+                side_vals["SP_KNOWN"] = 1
+                side_vals.update(sp(int(pid), game_date.to_datetime64()))
+                side_vals["SP_THROWS_L"] = 1 if throws.get(int(pid)) == "L" else 0
+            else:
+                side_vals["SP_KNOWN"] = 0
+            for col in SIDE_COLS:
+                row[prefix + col] = side_vals.get(col)
+        for col in DIFF_COLS:
+            h, a = row.get("HOME_" + col), row.get("AWAY_" + col)
+            row["DIFF_" + col] = (h - a) if h is not None and a is not None else None
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    # A small slate with e.g. no announced probables yields all-None feature
+    # columns -> object dtype, which LightGBM rejects. Force numeric.
+    for c in df.columns:
+        if c not in ("game_pk", "game_date", "season", "data_through_date"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
 

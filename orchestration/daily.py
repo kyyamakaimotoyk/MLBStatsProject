@@ -1,0 +1,365 @@
+"""Daily prediction pipeline (Phase 5).
+
+Morning run for a target date:
+  1. refresh   — import any recent final games + Statcast days (ledger-driven)
+  2. derived   — rebuild park factors (team rating is computed live)
+  3. slate     — fetch schedule + probables, snapshot to probable_pitchers
+  4. team      — load-or-retrain the runs model bundle (weekly staleness cap,
+                 the NBA calibration-incident lesson), predict margin/total/
+                 p_home for the slate with both lgbm_runs and the Elo baseline
+  5. batter    — load-or-retrain the per-PA bundle, project lineups (last
+                 posted lineup per team until real lineups land ~2-4h pregame),
+                 predict stat lines + probability heads vs the probable SP
+  6. sanity    — degeneracy tripwires on every output before anything ships
+
+Model bundles live in S3 via core/artifact_store (joblib), keyed
+team_runs_latest / batter_pa_latest, each carrying trained_through for the
+staleness check.
+
+Usage:
+    python -m orchestration.daily                  # today
+    python -m orchestration.daily --date 2026-07-15 --skip-ingest
+"""
+
+import argparse
+import logging
+import tempfile
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sqlalchemy import text
+
+from core import artifact_store
+from core.db import get_engine
+from core.features import select_features
+from features import batter_features as bf
+from features import park_factors, team_features
+from ingestion import backfill_games, backfill_statcast, statsapi_client
+from modeling import batter_model as bm
+from modeling.team_models import EloBaseline, make
+
+log = logging.getLogger("daily")
+
+VERSION = "daily_v1"
+RETRAIN_AFTER_DAYS = 7
+MAX_PA = 7
+
+
+# ------------------------------------------------------------- bundles
+
+def _load_bundle(name: str):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = artifact_store.load_artifact(name, Path(tmp) / name)
+        if path is None:
+            return None
+        try:
+            return joblib.load(path)
+        except Exception as exc:
+            log.warning("bundle %s unreadable (%s); retraining", name, exc)
+            return None
+
+
+def _save_bundle(name: str, bundle: dict) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / name
+        joblib.dump(bundle, path)
+        uri = artifact_store.save_artifact(path, name)
+    log.info("saved bundle %s -> %s", name, uri)
+
+
+def _stale(bundle: dict | None, target_date: str) -> bool:
+    if bundle is None:
+        return True
+    age = (pd.Timestamp(target_date) - pd.Timestamp(bundle["trained_through"])).days
+    return age > RETRAIN_AFTER_DAYS
+
+
+def _team_bundle(target_date: str) -> dict:
+    bundle = _load_bundle("team_runs_latest.joblib")
+    if not _stale(bundle, target_date):
+        log.info("team bundle fresh (trained through %s)", bundle["trained_through"])
+        return bundle
+    log.info("training team models on all data ...")
+    df = team_features.build_features()
+    feats = select_features(list(df.columns), "team_runs")
+    model = make("lgbm_runs")
+    model.fit(df, feats)
+    elo = EloBaseline()
+    elo.fit(df, feats)
+    bundle = {"model": model, "elo": elo, "feats": feats,
+              "trained_through": str(df["game_date"].max())[:10]}
+    _save_bundle("team_runs_latest.joblib", bundle)
+    return bundle
+
+
+def _batter_bundle(target_date: str) -> dict:
+    bundle = _load_bundle("batter_pa_latest.joblib")
+    if not _stale(bundle, target_date):
+        log.info("batter bundle fresh (trained through %s)", bundle["trained_through"])
+        return bundle
+    log.info("training per-PA batter model on all data (several minutes) ...")
+    comp = bf.build()
+    pa = comp["pa"]
+    feats = select_features(list(pa.columns), "batter_pa")
+    model = bm.BatterPAModel()
+    model.fit(pa, feats)
+
+    engine = get_engine()
+    w = pd.read_sql(text("""
+        SELECT AVG(CASE WHEN pg.player_id IS NOT NULL THEN 1.0 ELSE 0.0 END) AS w
+        FROM plays p
+        LEFT JOIN pitcher_game_lines pg
+          ON pg.game_pk = p.game_pk AND pg.player_id = p.pitcher_id AND pg.is_starter
+    """), engine)["w"].iloc[0]
+    league_row = {
+        "q_vs_right": float((pa["pitch_hand"] == "R").mean()),
+        "pitcher_means": {c: float(pa[c].mean()) for c in feats if c.startswith("P_")},
+        "same_hand_mean": float(pa["SAME_HAND"].mean()),
+    }
+    slot_pa = pd.read_sql(text("""
+        SELECT l.batting_order AS lineup_slot,
+               (l.team_id = g.home_team_id) AS is_home, b.pa
+        FROM lineups l
+        JOIN games g USING (game_pk)
+        JOIN batter_game_lines b USING (game_pk, player_id)
+        WHERE g.is_final AND l.batting_order BETWEEN 1 AND 9 AND b.pa IS NOT NULL
+    """), engine).astype({"pa": int})
+    bundle = {"model": model, "feats": feats, "w": float(w),
+              "league_row": league_row,
+              "pa_dists": bm.build_pa_dists(slot_pa, MAX_PA),
+              "trained_through": str(pa["game_date"].max())[:10]}
+    _save_bundle("batter_pa_latest.joblib", bundle)
+    return bundle
+
+
+# ------------------------------------------------------------- pipeline
+
+def refresh_ingest(target_date: str) -> None:
+    start = (pd.Timestamp(target_date) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    end = (pd.Timestamp(target_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    backfill_games.seed_range(start, end)
+    backfill_games.run(workers=4, sleep=0.1)
+    backfill_statcast.run(sleep=0.5)
+
+
+def fetch_slate(target_date: str) -> pd.DataFrame:
+    games = statsapi_client.schedule(target_date, target_date, hydrate="probablePitcher")
+    rows = []
+    for g in games:
+        if g.get("status", {}).get("abstractGameState") != "Preview":
+            continue
+        rows.append({
+            "game_pk": g["gamePk"],
+            "game_date": g["officialDate"],
+            "season": int(g["season"]),
+            "game_type": g.get("gameType"),
+            "day_night": g.get("dayNight"),
+            "game_number": g.get("gameNumber"),
+            "venue_id": g.get("venue", {}).get("id"),
+            "home_team_id": g["teams"]["home"]["team"]["id"],
+            "away_team_id": g["teams"]["away"]["team"]["id"],
+            "home_probable_id": g["teams"]["home"].get("probablePitcher", {}).get("id"),
+            "away_probable_id": g["teams"]["away"].get("probablePitcher", {}).get("id"),
+        })
+    slate = pd.DataFrame(rows)
+    if not slate.empty:
+        with get_engine().begin() as conn:
+            conn.execute(text("""
+                INSERT INTO probable_pitchers (game_pk, source, home_pitcher_id, away_pitcher_id)
+                VALUES (:game_pk, 'daily', :home_probable_id, :away_probable_id)
+            """), slate[["game_pk", "home_probable_id", "away_probable_id"]]
+                 .astype(object).where(slate[["game_pk", "home_probable_id",
+                                              "away_probable_id"]].notna(), None)
+                 .to_dict("records"))
+    log.info("slate for %s: %d games (%d with both probables)", target_date, len(slate),
+             int((slate["home_probable_id"].notna() & slate["away_probable_id"].notna()).sum())
+             if not slate.empty else 0)
+    return slate
+
+
+def predict_team(slate: pd.DataFrame, target_date: str, asof: str) -> pd.DataFrame:
+    bundle = _team_bundle(target_date)
+    rows = team_features.build_prediction_rows(slate, asof)
+    warnings = []
+    out = []
+    for name, model in (("lgbm_runs", bundle["model"]), ("elo", bundle["elo"])):
+        preds = model.predict(rows, bundle["feats"])
+        preds["game_pk"] = rows["game_pk"].to_numpy()
+        preds["model_type"] = name
+        out.append(preds)
+        if ((preds["p_home"] < 0.10) | (preds["p_home"] > 0.90)).any():
+            warnings.append(f"{name}: p_home outside [0.10, 0.90]")
+        if not preds["pred_total"].between(5, 14).all():
+            warnings.append(f"{name}: pred_total outside [5, 14]")
+        mean_p = preds["p_home"].mean()
+        if not 0.40 <= mean_p <= 0.68:
+            warnings.append(f"{name}: slate mean p_home {mean_p:.3f} outside [0.40, 0.68]")
+    all_preds = pd.concat(out, ignore_index=True)
+
+    records = all_preds.assign(model_version=VERSION, data_through_date=asof)
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            INSERT INTO model_predictions
+                (game_pk, model_type, model_version, data_through_date,
+                 pred_home_runs, pred_away_runs, pred_margin, pred_total, p_home)
+            VALUES (:game_pk, :model_type, :model_version, :data_through_date,
+                    :pred_home_runs, :pred_away_runs, :pred_margin, :pred_total, :p_home)
+            ON CONFLICT (game_pk, model_type, model_version) DO UPDATE SET
+                data_through_date = EXCLUDED.data_through_date,
+                pred_home_runs = EXCLUDED.pred_home_runs,
+                pred_away_runs = EXCLUDED.pred_away_runs,
+                pred_margin = EXCLUDED.pred_margin,
+                pred_total = EXCLUDED.pred_total,
+                p_home = EXCLUDED.p_home, created_at = now()
+        """), records[["game_pk", "model_type", "model_version", "data_through_date",
+                       "pred_home_runs", "pred_away_runs", "pred_margin",
+                       "pred_total", "p_home"]].to_dict("records"))
+    for w in warnings:
+        log.warning("TRIPWIRE %s", w)
+    all_preds.attrs["warnings"] = warnings
+    return all_preds
+
+
+def _projected_lineups() -> pd.DataFrame:
+    """Most recent posted starting lineup per team (v1 projection; real
+    lineups land ~2-4h pregame and are a queued upgrade)."""
+    return pd.read_sql(text("""
+        WITH latest AS (
+            SELECT DISTINCT ON (l.team_id) l.team_id, l.game_pk
+            FROM lineups l JOIN games g USING (game_pk)
+            ORDER BY l.team_id, g.game_date DESC, g.game_pk DESC
+        )
+        SELECT l.team_id, l.player_id, l.batting_order AS lineup_slot
+        FROM lineups l JOIN latest USING (team_id, game_pk)
+    """), get_engine())
+
+
+def predict_batters(slate: pd.DataFrame, target_date: str, asof: str) -> pd.DataFrame:
+    bundle = _batter_bundle(target_date)
+    comp = bf.build_asof(asof)
+    lineups = _projected_lineups()
+    players = pd.read_sql(text("SELECT player_id, bats, throws FROM players"), get_engine())
+
+    rows = []
+    for g in slate.itertuples():
+        for side in ("home", "away"):
+            team = g.home_team_id if side == "home" else g.away_team_id
+            sp_id = g.away_probable_id if side == "home" else g.home_probable_id
+            nine = lineups[lineups["team_id"] == team]
+            for b in nine.itertuples():
+                rows.append({
+                    "game_pk": g.game_pk, "season": g.season, "venue_id": g.venue_id,
+                    "player_id": b.player_id, "lineup_slot": b.lineup_slot,
+                    "is_home": side == "home",
+                    "sp_id": sp_id if not pd.isna(sp_id) else None,
+                })
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame = frame.merge(players[["player_id", "bats"]], on="player_id", how="left")
+    frame = frame.merge(players.rename(columns={"player_id": "sp_id",
+                                                "throws": "sp_throws"})[["sp_id", "sp_throws"]],
+                        on="sp_id", how="left")
+
+    feats = bundle["feats"]
+    vs_lg = bm.assemble_matchup(frame, comp, bundle["league_row"], comp["park"],
+                                per_game=False)
+    p_lg = bundle["model"].predict_proba(vs_lg, feats)
+    has_sp = frame["sp_id"].notna().to_numpy()
+    probs = p_lg.copy()
+    if has_sp.any():
+        vs_sp = bm.assemble_matchup(frame[has_sp], comp, None, comp["park"],
+                                    per_game=False)
+        p_sp = bundle["model"].predict_proba(vs_sp, feats)
+        w = bundle["w"]
+        probs[has_sp] = w * p_sp + (1 - w) * p_lg[has_sp]
+
+    dist = bm.pa_lookup(bundle["pa_dists"])(frame["lineup_slot"].to_numpy(),
+                                            frame["is_home"].to_numpy())
+    agg = bm.aggregate_game(probs, dist)
+
+    warnings = []
+    if not np.all((agg["p_hit"] > 0.20) & (agg["p_hit"] < 0.90)):
+        warnings.append("batter: p_hit outside [0.20, 0.90]")
+    if not np.all((agg["exp_pa"] > 2.5) & (agg["exp_pa"] < 5.5)):
+        warnings.append("batter: exp_pa outside [2.5, 5.5]")
+    for w_ in warnings:
+        log.warning("TRIPWIRE %s", w_)
+
+    result = frame[["game_pk", "player_id", "sp_id", "lineup_slot"]].copy()
+    for k in ("exp_pa", "exp_h", "exp_tb", "exp_hr", "exp_bb", "exp_k",
+              "p_hit", "p_hr", "p_tb2", "p_bb"):
+        result[k] = agg[k]
+    records = result.assign(model_version=VERSION, data_through_date=asof)
+    records = records.astype(object).where(records.notna(), None)
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            INSERT INTO batter_predictions
+                (game_pk, player_id, model_version, data_through_date, sp_id,
+                 lineup_slot, exp_pa, exp_h, exp_tb, exp_hr, exp_bb, exp_k,
+                 p_hit, p_hr, p_tb2, p_bb)
+            VALUES (:game_pk, :player_id, :model_version, :data_through_date, :sp_id,
+                    :lineup_slot, :exp_pa, :exp_h, :exp_tb, :exp_hr, :exp_bb, :exp_k,
+                    :p_hit, :p_hr, :p_tb2, :p_bb)
+            ON CONFLICT (game_pk, player_id, model_version) DO UPDATE SET
+                data_through_date = EXCLUDED.data_through_date,
+                sp_id = EXCLUDED.sp_id, lineup_slot = EXCLUDED.lineup_slot,
+                exp_pa = EXCLUDED.exp_pa, exp_h = EXCLUDED.exp_h,
+                exp_tb = EXCLUDED.exp_tb, exp_hr = EXCLUDED.exp_hr,
+                exp_bb = EXCLUDED.exp_bb, exp_k = EXCLUDED.exp_k,
+                p_hit = EXCLUDED.p_hit, p_hr = EXCLUDED.p_hr,
+                p_tb2 = EXCLUDED.p_tb2, p_bb = EXCLUDED.p_bb, created_at = now()
+        """), records.to_dict("records"))
+    result.attrs["warnings"] = warnings
+    return result
+
+
+def summarize(slate, team_preds, batter_preds) -> None:
+    teams = pd.read_sql(text("SELECT team_id, abbrev FROM teams"), get_engine())
+    abbrev = teams.set_index("team_id")["abbrev"]
+    names = pd.read_sql(text("SELECT player_id, full_name FROM players"), get_engine()) \
+        .set_index("player_id")["full_name"]
+
+    print(f"\n=== slate: {len(slate)} games ===")
+    lgbm = team_preds[team_preds["model_type"] == "lgbm_runs"].set_index("game_pk")
+    elo = team_preds[team_preds["model_type"] == "elo"].set_index("game_pk")
+    for g in slate.itertuples():
+        l, e = lgbm.loc[g.game_pk], elo.loc[g.game_pk]
+        print(f"  {abbrev.get(g.away_team_id, '?'):3s} @ {abbrev.get(g.home_team_id, '?'):3s}"
+              f"  p_home lgbm {l['p_home']:.3f} / elo {e['p_home']:.3f}"
+              f" | margin {l['pred_margin']:+.2f} | total {l['pred_total']:.2f}")
+    if len(batter_preds):
+        print("\n  top 5 HR probabilities today:")
+        for r in batter_preds.nlargest(5, "p_hr").itertuples():
+            print(f"    {names.get(r.player_id, r.player_id):24s} p_hr {r.p_hr:.3f}"
+                  f"  exp_tb {r.exp_tb:.2f}")
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--date", default=str(pd.Timestamp.now().date()))
+    ap.add_argument("--skip-ingest", action="store_true")
+    args = ap.parse_args()
+    target = args.date
+    asof = (pd.Timestamp(target) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if not args.skip_ingest:
+        refresh_ingest(target)
+    park_factors.main()
+
+    slate = fetch_slate(target)
+    if slate.empty:
+        log.info("no games scheduled for %s", target)
+        return
+    team_preds = predict_team(slate, target, asof)
+    batter_preds = predict_batters(slate, target, asof)
+    summarize(slate, team_preds, batter_preds)
+    warnings = team_preds.attrs.get("warnings", []) + batter_preds.attrs.get("warnings", [])
+    print(f"\n{'!!! ' + str(len(warnings)) + ' TRIPWIRE WARNINGS' if warnings else 'all sanity checks passed'}")
+
+
+if __name__ == "__main__":
+    main()

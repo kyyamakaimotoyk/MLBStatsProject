@@ -156,28 +156,39 @@ def seed_range(start: str, end: str) -> None:
 
 
 def _process_game(key: str) -> bool:
-    """Fetch, archive, parse, load one game. Returns True on success."""
+    """Fetch, archive, parse, load one game. Returns True on success.
+
+    The outer except exists because the inner handlers write to the ledger —
+    if the DB itself is unreachable (network blip), that write raises too.
+    In that case we swallow and leave the ledger untouched: the item stays
+    pending with no attempt burned, and the next run picks it up.
+    """
     game_pk = int(key)
     try:
-        feed = statsapi_client.live_feed(game_pk)
-        parsed = feed_live.parse(feed)
-        season = parsed["game"]["season"]
-        s3_key = raw_archive.put_json_gz(f"statsapi/feed_live/{season}/{game_pk}.json.gz", feed)
-        with get_engine().begin() as conn:
-            _load_game(conn, parsed)
-        ledger.mark(SOURCE, key, "imported", s3_key=s3_key)
-        return True
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else None
-        if status == 404:
-            ledger.mark(SOURCE, key, "permanent_missing", detail="404 from feed")
-        else:
+        try:
+            feed = statsapi_client.live_feed(game_pk)
+            parsed = feed_live.parse(feed)
+            season = parsed["game"]["season"]
+            s3_key = raw_archive.put_json_gz(
+                f"statsapi/feed_live/{season}/{game_pk}.json.gz", feed)
+            with get_engine().begin() as conn:
+                _load_game(conn, parsed)
+            ledger.mark(SOURCE, key, "imported", s3_key=s3_key)
+            return True
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                ledger.mark(SOURCE, key, "permanent_missing", detail="404 from feed")
+            else:
+                ledger.mark(SOURCE, key, "error", detail=str(exc))
+            log.warning("game %s failed: %s", key, exc)
+            return False
+        except Exception as exc:  # keep the backfill alive; ledger records it
             ledger.mark(SOURCE, key, "error", detail=str(exc))
-        log.warning("game %s failed: %s", key, exc)
-        return False
-    except Exception as exc:  # keep the backfill alive; ledger records it
-        ledger.mark(SOURCE, key, "error", detail=str(exc))
-        log.warning("game %s failed: %s", key, exc)
+            log.warning("game %s failed: %s", key, exc)
+            return False
+    except Exception as exc:
+        log.warning("game %s: unreachable infrastructure, left pending: %s", key, exc)
         return False
 
 

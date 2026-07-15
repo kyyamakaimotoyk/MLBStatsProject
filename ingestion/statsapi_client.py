@@ -47,12 +47,15 @@ def get_json(path: str, params: dict | None = None) -> dict:
     raise RuntimeError("unreachable")
 
 
-def schedule(start_date: str, end_date: str, game_types: str = GAME_TYPES) -> list[dict]:
-    """Flat list of schedule game dicts for a date range (inclusive)."""
-    data = get_json(
-        "/api/v1/schedule",
-        {"sportId": 1, "startDate": start_date, "endDate": end_date, "gameTypes": game_types},
-    )
+def schedule(start_date: str, end_date: str, game_types: str = GAME_TYPES,
+             hydrate: str | None = None) -> list[dict]:
+    """Flat list of schedule game dicts for a date range (inclusive).
+    hydrate: e.g. 'probablePitcher' to embed probables in each game dict."""
+    params = {"sportId": 1, "startDate": start_date, "endDate": end_date,
+              "gameTypes": game_types}
+    if hydrate:
+        params["hydrate"] = hydrate
+    data = get_json("/api/v1/schedule", params)
     return [g for d in data.get("dates", []) for g in d.get("games", [])]
 
 

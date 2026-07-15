@@ -129,7 +129,11 @@ def run(limit: int | None = None, sleep: float = 1.0) -> None:
                 ledger.mark(SOURCE, day, "imported", s3_key=s3_key, detail=f"{n} pitches")
                 done += 1
         except Exception as exc:
-            ledger.mark(SOURCE, day, "error", detail=str(exc))
+            try:
+                ledger.mark(SOURCE, day, "error", detail=str(exc))
+            except Exception:
+                # DB unreachable: leave the day pending, no attempt burned.
+                log.warning("day %s: ledger unreachable, left pending", day)
             errors += 1
             log.warning("day %s failed: %s", day, exc)
         if (done + errors) % 10 == 0:

@@ -90,54 +90,8 @@ def _load_game_side_data():
     return lineups
 
 
-def _matchup_features(rows: pd.DataFrame, comp: dict, league_row: dict | None,
-                      park: pd.DataFrame) -> pd.DataFrame:
-    """Assemble the model feature frame for (batter, game, opposing SP) rows.
-    If league_row is given, pitcher-side features come from it (the
-    'vs unknown relief' variant); otherwise from the SP's rolling profile."""
-    df = rows.merge(comp["b_rates"], left_on=["player_id", "game_pk"],
-                    right_on=["batter_id", "game_pk"], how="left")
-    df = df.merge(comp["b_sc"], left_on=["player_id", "game_pk"],
-                  right_on=["batter_id", "game_pk"], how="left", suffixes=("", "_sc"))
-    df = df.merge(park, on=["season", "venue_id"], how="left")
-
-    sp_left = df["sp_throws"].fillna("R") == "L"
-    # effective batter side: switch hitters take the opposite of the pitcher
-    bats = df["bats"].fillna("R")
-    eff_side = np.where(bats == "S", np.where(sp_left, "R", "L"), bats)
-
-    for c in CLASSES:
-        df[f"B_RATE_{c}"] = df[f"B_rate_{c}"]
-    if league_row is None:
-        for c in CLASSES:
-            df[f"B_RATE_{c}_VS_HAND"] = np.where(sp_left, df[f"B_rate_{c}_vsL"],
-                                                 df[f"B_rate_{c}_vsR"])
-        df["B_PA_VS_HAND"] = np.where(sp_left, df["B_pa_vsL"], df["B_pa_vsR"])
-        p = comp["p_rates"].merge(comp["arsenal"], on=["pitcher_id", "game_pk"])
-        df = df.merge(p, left_on=["sp_id", "game_pk"],
-                      right_on=["pitcher_id", "game_pk"], how="left")
-        vs_lhb = eff_side == "L"
-        for c in CLASSES:
-            df[f"P_RATE_{c}"] = df[f"P_rate_{c}"]
-            df[f"P_RATE_{c}_VS_SIDE"] = np.where(vs_lhb, df[f"P_rate_{c}_vsL"],
-                                                 df[f"P_rate_{c}_vsR"])
-        df["P_BF_N"] = df["P_pa"]
-        df["P_BF_VS_SIDE"] = np.where(vs_lhb, df["P_pa_vsL"], df["P_pa_vsR"])
-        df["SAME_HAND"] = (eff_side == np.where(sp_left, "L", "R")).astype(int)
-    else:
-        q_r = league_row["q_vs_right"]
-        for c in CLASSES:
-            df[f"B_RATE_{c}_VS_HAND"] = (q_r * df[f"B_rate_{c}_vsR"]
-                                         + (1 - q_r) * df[f"B_rate_{c}_vsL"])
-        df["B_PA_VS_HAND"] = q_r * df["B_pa_vsR"] + (1 - q_r) * df["B_pa_vsL"]
-        for col, val in league_row["pitcher_means"].items():
-            df[col] = val
-        df["SAME_HAND"] = league_row["same_hand_mean"]
-
-    df["B_PA_N"] = df["B_pa"]
-    df["IS_HOME"] = df["is_home"].astype(int)
-    df["PARK_PF_RUNS"] = df["pf_runs"].fillna(1.0)
-    return df
+# Matchup assembly lives in modeling.batter_model.assemble_matchup — shared
+# with the daily pipeline so the two paths can never drift.
 
 
 def run(seed: int = 0, write_preds: bool = True) -> None:
@@ -183,8 +137,8 @@ def run(seed: int = 0, write_preds: bool = True) -> None:
         eligible = sides[(sides["season"] == season) & (sides["game_type"] == "R")
                          & sides["prob_matched"] & sides["pa"].notna()
                          & sides["lineup_slot"].between(1, 9)].reset_index(drop=True)
-        vs_sp = _matchup_features(eligible, comp, None, park)
-        vs_lg = _matchup_features(eligible, comp, league_row, park)
+        vs_sp = bm.assemble_matchup(eligible, comp, None, park, per_game=True)
+        vs_lg = bm.assemble_matchup(eligible, comp, league_row, park, per_game=True)
         # Require the merges to have hit (rate cols are never NaN when they
         # did, thanks to shrinkage); other NaNs (e.g. no-BBE xwOBA) are fine.
         ok = (vs_sp[f"B_rate_{CLASSES[0]}"].notna()

@@ -28,8 +28,9 @@ MEAN = 1500.0
 CARRYOVER = 2 / 3    # regression toward MEAN at season boundaries
 
 
-def build(max_date: str | None = None) -> pd.DataFrame:
-    """Return one row per game: pregame ratings and home win probability."""
+def _replay(max_date: str | None = None):
+    """Replay all final games chronologically; returns (per-game rows,
+    final ratings, last season seen per team)."""
     sql = """
         SELECT game_pk, season, game_date, first_pitch_utc,
                home_team_id, away_team_id, home_score, away_score
@@ -74,7 +75,34 @@ def build(max_date: str | None = None) -> pd.DataFrame:
         ratings[g.away_team_id] -= delta
 
     log.info("built ratings for %d games; pure-Elo accuracy %.3f", len(rows), correct / max(decided, 1))
+    return rows, ratings, last_season
+
+
+def build(max_date: str | None = None) -> pd.DataFrame:
+    """One row per played game: pregame ratings and home win probability."""
+    rows, _, _ = _replay(max_date)
     return pd.DataFrame(rows)
+
+
+def current_state(max_date: str | None = None) -> tuple[dict[int, float], dict[int, int]]:
+    """Ratings after all final games through max_date, for predicting
+    UNPLAYED games. Apply season carryover via pregame() when the upcoming
+    game's season differs from the team's last seen season."""
+    _, ratings, last_season = _replay(max_date)
+    return ratings, last_season
+
+
+def pregame(ratings: dict, last_season: dict, home: int, away: int,
+            season: int) -> tuple[float, float, float]:
+    """(home_rating, away_rating, p_home) for an upcoming game."""
+    out = []
+    for team in (home, away):
+        r = ratings.get(team, MEAN)
+        if last_season.get(team) != season:
+            r = MEAN + CARRYOVER * (r - MEAN)
+        out.append(r)
+    rh, ra = out
+    return rh, ra, 1.0 / (1.0 + 10 ** (-((rh + HOME_ADV - ra) / 400.0)))
 
 
 def main() -> None:

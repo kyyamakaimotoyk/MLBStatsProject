@@ -59,7 +59,16 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python -m validation.walkforward   # team models, writes registry+preds
 .venv\Scripts\python -m validation.ablation --a lgbm_runs --b elo
 .venv\Scripts\python -m validation.walkforward_batter   # per-PA batter model (long; run detached)
+
+# Daily pipeline (Phase 5) — ingest refresh + slate + all three products:
+.venv\Scripts\python -m orchestration.daily              # today
+.venv\Scripts\python -m orchestration.daily --date 2026-07-16 --skip-ingest
+.venv\Scripts\python scripts\track_performance.py        # outcomes vs predictions
 ```
+
+Model bundles live in S3 (`models/team_runs_latest.joblib`,
+`models/batter_pa_latest.joblib`) and retrain automatically when older than
+7 days — never ship a stale bundle silently (NBA calibration-incident lesson).
 
 To retry ledger entries that exhausted their attempts:
 `UPDATE ingest_ledger SET attempts=0, status='pending' WHERE status='error';`

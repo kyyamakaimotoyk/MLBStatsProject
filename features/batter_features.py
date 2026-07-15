@@ -295,6 +295,60 @@ def build(max_date: str | None = None) -> dict:
             "b_sc": b_sc, "arsenal": ars, "park": park, "league_prior": prior}
 
 
+def _asof_rates(per_game: pd.DataFrame, player_col: str, window: int,
+                league: np.ndarray) -> pd.DataFrame:
+    """One shrunken-rate row per player over their last `window` games
+    through the data cutoff — for predicting games AFTER that cutoff."""
+    cols = [f"{c}{sfx}" for sfx in ("", "_vsL", "_vsR") for c in CLASSES + ["pa"]]
+    tail = per_game.groupby(player_col, sort=False).tail(window)
+    sums = tail.groupby(player_col, sort=False)[cols].sum()
+    out = pd.DataFrame(index=sums.index)
+    for sfx in ("", "_vsL", "_vsR"):
+        n = sums[f"pa{sfx}"]
+        w = SHRINK_OVERALL if sfx == "" else SHRINK_SPLIT
+        out[f"pa{sfx}"] = n
+        for ci, c in enumerate(CLASSES):
+            out[f"rate_{c}{sfx}"] = (sums[f"{c}{sfx}"] + w * league[ci]) / (n + w)
+    return out.reset_index()
+
+
+def _asof_ratios(per_game: pd.DataFrame, player_col: str, window: int,
+                 ratios: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    tail = per_game.groupby(player_col, sort=False).tail(window)
+    cols = list({c for pair in ratios.values() for c in pair})
+    sums = tail.groupby(player_col, sort=False)[cols].sum()
+    out = pd.DataFrame(index=sums.index)
+    for out_col, (num, den) in ratios.items():
+        out[out_col] = np.where(sums[den] > 0, sums[num] / sums[den], np.nan)
+    return out.reset_index()
+
+
+def build_asof(asof_date: str) -> dict:
+    """Per-player components (through asof_date) for pregame prediction.
+    Same column names as build()'s per-game components, minus game_pk."""
+    pa = load_pa(max_date=asof_date)
+    prior = _league_prior(pa)
+    league = prior(np.datetime64(pd.Timestamp(asof_date) + pd.Timedelta(days=1)))
+
+    b = _asof_rates(_per_game_counts(pa, "batter_id", "pitch_hand"),
+                    "batter_id", B_WINDOW, league)
+    b = b.add_prefix("B_").rename(columns={"B_batter_id": "batter_id"})
+    p = _asof_rates(_per_game_counts(pa, "pitcher_id", "bat_side"),
+                    "pitcher_id", P_WINDOW, league)
+    p = p.add_prefix("P_").rename(columns={"P_pitcher_id": "pitcher_id"})
+    b_sc = _asof_ratios(_batter_statcast(asof_date), "batter_id", B_WINDOW,
+                        {"B_XWOBA_CON": ("xwoba_num", "bbe")})
+    ars = _asof_ratios(_pitcher_arsenal(asof_date), "pitcher_id", P_WINDOW,
+                       {"P_FB_VELO": ("fb_velo_sum", "fb_n"),
+                        "P_BREAKING_PCT": ("breaking_n", "pitches"),
+                        "P_OFFSPEED_PCT": ("offspeed_n", "pitches"),
+                        "P_WHIFF_RATE": ("whiffs", "swings")})
+    park = pd.read_sql(text("SELECT season, venue_id, pf_runs FROM park_factors"),
+                       get_engine())
+    return {"pa": pa, "b_rates": b, "p_rates": p, "b_sc": b_sc,
+            "arsenal": ars, "park": park}
+
+
 def feature_columns() -> list[str]:
     cols = [f"B_RATE_{c}" for c in CLASSES] + [f"B_RATE_{c}_VS_HAND" for c in CLASSES]
     cols += [f"P_RATE_{c}" for c in CLASSES] + [f"P_RATE_{c}_VS_SIDE" for c in CLASSES]

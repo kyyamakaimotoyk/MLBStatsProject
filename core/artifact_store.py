@@ -55,8 +55,15 @@ def load_artifact(name: str, dest_path: str | Path) -> Path | None:
     bucket = _bucket()
     if bucket:
         import boto3
+        from botocore.exceptions import ClientError
 
-        boto3.client("s3").download_file(bucket, f"{_prefix()}{name}", str(dest_path))
+        try:
+            boto3.client("s3").download_file(bucket, f"{_prefix()}{name}", str(dest_path))
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
         return dest_path
     local_dir = _local_dir()
     if local_dir and (local_dir / name).exists():

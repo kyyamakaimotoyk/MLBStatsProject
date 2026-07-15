@@ -106,18 +106,25 @@ def _per_game_counts(pa: pd.DataFrame, player_col: str, opp_hand_col: str) -> pd
     return merged.sort_values([player_col, "game_date", "game_pk"]).reset_index(drop=True)
 
 
+# Era-constant PA outcome rates (2020s MLB), CLASSES order. Used as the
+# shrinkage prior before the expanding sample reaches 10k PAs — a FIXED
+# constant, never derived from the loaded data: a full-sample fallback here
+# leaked future information into early-season rows (caught by the leakage
+# test when lineup-strength features surfaced it).
+ERA_PRIOR = np.array([0.464, 0.223, 0.082, 0.012, 0.140, 0.043, 0.004, 0.032])
+
+
 def _league_prior(pa: pd.DataFrame):
     """Expanding league class rates strictly before each date."""
     daily = pd.crosstab(pa["game_date"], pa["outcome"]).reindex(columns=CLASSES, fill_value=0)
     dates = daily.index.to_numpy()
     cum = np.vstack([np.zeros(len(CLASSES)), daily.to_numpy(float).cumsum(axis=0)])
     totals = cum.sum(axis=1)
-    global_rate = cum[-1] / max(totals[-1], 1.0)
 
     def prior(d) -> np.ndarray:
         i = int(np.searchsorted(dates, d, side="left"))
-        if totals[i] < 10000:          # early 2022: fall back to full-sample rates
-            return global_rate
+        if totals[i] < 10000:
+            return ERA_PRIOR
         return cum[i] / totals[i]
 
     return prior

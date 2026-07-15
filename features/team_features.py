@@ -322,17 +322,63 @@ def _bullpen_lookup(bullpen: pd.DataFrame):
 
 # ------------------------------------------------------------- assembly
 
+LINEUP_COLS = ["LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE",
+               "LINEUP_HR_RATE", "LINEUP_XWOBA_CON", "LINEUP_SAMPLE_PA"]
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
     "SP_WOBA_AGAINST_L10", "SP_XWOBA_CON_AGAINST_L10", "SP_IP_PER_START_L10",
     "SP_DAYS_REST", "SP_THROWS_L",
-]
+] + LINEUP_COLS
 DIFF_COLS = [
     "RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
     "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10", "SP_WOBA_AGAINST_L10",
+    "LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE", "LINEUP_HR_RATE",
+    "LINEUP_XWOBA_CON",
 ]
+
+# Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
+WOBA_WEIGHTS = {"BB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
+SLOT_PA_WEIGHTS = {1: 4.65, 2: 4.55, 3: 4.43, 4: 4.33, 5: 4.22,
+                   6: 4.11, 7: 3.99, 8: 3.87, 9: 3.75}
+
+
+def _lineup_strength(max_date) -> dict:
+    """(game_pk, team_id) -> aggregates of the posted starting nine's shrunken
+    rolling rates (experiment E5).
+
+    Lineup composition is pregame-posted information — the same standing as
+    announced probables. The rates come from features/batter_features.py and
+    are point-in-time by construction (windows exclude the game's own date).
+    """
+    from features import batter_features as bf
+
+    comp = bf.build(max_date=max_date)
+    b = comp["b_rates"].merge(comp["b_sc"], on=["batter_id", "game_pk"], how="left")
+    lineups = pd.read_sql(text("""
+        SELECT game_pk, player_id, team_id, batting_order
+        FROM lineups WHERE batting_order BETWEEN 1 AND 9
+    """), get_engine())
+    df = lineups.merge(b, left_on=["player_id", "game_pk"],
+                       right_on=["batter_id", "game_pk"], how="inner")
+    df["w"] = df["batting_order"].map(SLOT_PA_WEIGHTS)
+    df["woba"] = sum(df[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
+
+    src = {"LINEUP_WOBA": "woba", "LINEUP_K_RATE": "B_rate_K",
+           "LINEUP_BB_RATE": "B_rate_BB", "LINEUP_HR_RATE": "B_rate_HR",
+           "LINEUP_XWOBA_CON": "B_XWOBA_CON", "LINEUP_SAMPLE_PA": "B_pa"}
+    out = {}
+    for (game_pk, team_id), grp in df.groupby(["game_pk", "team_id"], sort=False):
+        w = grp["w"].to_numpy(float)
+        row = {}
+        for feat, col in src.items():
+            v = grp[col].to_numpy(float)
+            m = ~np.isnan(v)
+            row[feat] = float((v[m] * w[m]).sum() / w[m].sum()) if m.any() else np.nan
+        out[(game_pk, team_id)] = row
+    log.info("lineup strength computed for %d team-games", len(out))
+    return out
 
 
 def build_features(max_date: str | None = None, cross_season: bool = False) -> pd.DataFrame:
@@ -358,6 +404,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     team_roll = _team_rolling(team_games, cross_season=cross_season)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
+    lineup = _lineup_strength(max_date)
 
     probables = _load_simple("""
         SELECT game_pk, home_pitcher_id, away_pitcher_id
@@ -409,6 +456,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             team_id = g.home_team_id if side == "home" else g.away_team_id
             side_vals = dict(team_roll.get((g.game_pk, team_id), {}))
             side_vals.update(bp(team_id, g.game_date.to_datetime64()))
+            side_vals.update(lineup.get((g.game_pk, team_id), {}))
             pid = prob[f"{side}_pitcher_id"] if prob is not None else None
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1

@@ -120,6 +120,37 @@ information source the market-adjacent Elo baseline cannot see.
 
 ---
 
+## E5 — 2026-07-15 — lineup-strength features: PARKED (positive, not significant)
+
+**Hypothesis.** The posted starting nine, aggregated from shrunken per-batter
+class rates (slot-PA-weighted wOBA/K/BB/HR/xwOBA-contact), carries information
+Elo and team-form aggregates cannot see (injuries, rest, platoon stacking).
+
+**Leakage catch first.** The initial build FAILED scripts/test_leakage.py:
+batter_features' shrinkage prior fell back to FULL-SAMPLE league rates for
+early-2022 dates — future data reaching 2.3% of rows at ~3e-4. Fixed with a
+fixed era-constant prior (ERA_PRIOR). The same subtle leak existed in the
+Phase 4 batter training path (impact negligible: constant prior, first ~week
+of 2022 only, test seasons unaffected). Snapshot v20260715_081124, PASS.
+
+**Result (8,713 paired games).**
+- lgbm_runs+lineup vs lgbm_runs: acc .5489 vs .5463 (p=.51), margin MAE
+  3.5008 vs 3.5055 (p=.28), AUC +.003 (p=.31) — all positive, none significant.
+- slim+lineup vs elo: acc p=.51, AUC p=.32, and margin MAE 3.4972 vs 3.4886
+  (p=.26) — **the first configuration at statistical parity with Elo on all
+  four metrics** (slim alone lost margin MAE at p=.03). Parity, not a win.
+
+**Decision.** Flag stays off; nothing ships. v1 aggregation likely too blunt:
+heavy shrinkage (W=150/300) compresses lineup differences, and slot-weighted
+means dilute the strongest signal (a star missing). Queued sharper variants:
+- E5b: deviation aggregation — sum of (batter rate - league) with lighter
+  shrinkage, plus a "missing regular" indicator vs the team's recent lineup.
+- E5c: platoon-aware lineup rates vs the opposing probable's hand.
+feature_set_current -> v20260715_081124 (fixed prior + gated columns;
+default behavior unchanged).
+
+---
+
 ## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
 
 **Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with

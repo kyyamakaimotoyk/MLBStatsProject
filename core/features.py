@@ -23,10 +23,12 @@ BATTER_META_COLS = ["game_pk", "game_date", "season", "at_bat_index",
 FEATURE_FLAGS: dict[str, bool] = {
     "umpire": False,    # E3: HP umpire strikeout tendency (UMP_K_FACTOR)
     "wind_out": False,  # E3: signed out/in wind component (WIND_OUT_MPH)
+    "lineup": False,    # E5: posted-lineup strength from shrunken batter rates
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
     "wind_out": ("WIND_OUT",),
+    "lineup": ("HOME_LINEUP_", "AWAY_LINEUP_", "DIFF_LINEUP_"),
 }
 
 TARGETS = ("team_runs", "margin", "total", "batter_pa")
@@ -54,7 +56,8 @@ def select_features(columns: list[str], target: str, profile: str = "full",
             feats = [c for c in feats if not c.startswith(prefixes)]
     if profile == "slim":
         feats = [c for c in feats
-                 if c.startswith("ELO_") or "_SP_" in c or c == "PARK_PF_RUNS"]
+                 if c.startswith("ELO_") or "_SP_" in c or "_LINEUP_" in c
+                 or c == "PARK_PF_RUNS"]
     elif profile != "full":
         raise ValueError(f"unknown profile {profile!r}")
     return sorted(feats)

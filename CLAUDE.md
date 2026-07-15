@@ -48,6 +48,16 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python -m ingestion.backfill_games --season 2024 --workers 6
 .venv\Scripts\python -m ingestion.backfill_statcast --limit 10
 .venv\Scripts\python -m ingestion.import_reference --chadwick
+
+# Features (rebuild order: rating -> park -> features):
+.venv\Scripts\python -m features.team_rating
+.venv\Scripts\python -m features.park_factors
+.venv\Scripts\python -m features.team_features --set-current
+.venv\Scripts\python scripts\test_leakage.py     # must PASS before a snapshot ships
+
+# Modeling:
+.venv\Scripts\python -m validation.walkforward   # all model types, writes registry+preds
+.venv\Scripts\python -m validation.ablation --a lgbm_runs --b elo
 ```
 
 To retry ledger entries that exhausted their attempts:

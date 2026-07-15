@@ -323,7 +323,8 @@ def _bullpen_lookup(bullpen: pd.DataFrame):
 # ------------------------------------------------------------- assembly
 
 LINEUP_COLS = ["LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE",
-               "LINEUP_HR_RATE", "LINEUP_XWOBA_CON", "LINEUP_SAMPLE_PA"]
+               "LINEUP_HR_RATE", "LINEUP_XWOBA_CON", "LINEUP_SAMPLE_PA",
+               "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA", "LINEUP_N_REG_OUT"]
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
@@ -335,7 +336,8 @@ DIFF_COLS = [
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
     "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10", "SP_WOBA_AGAINST_L10",
     "LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE", "LINEUP_HR_RATE",
-    "LINEUP_XWOBA_CON",
+    "LINEUP_XWOBA_CON", "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA",
+    "LINEUP_N_REG_OUT",
 ]
 
 # Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
@@ -353,17 +355,44 @@ def _lineup_strength(max_date) -> dict:
     are point-in-time by construction (windows exclude the game's own date).
     """
     from features import batter_features as bf
+    from features.batter_features import CLASSES
 
     comp = bf.build(max_date=max_date)
+    prior = comp["league_prior"]
     b = comp["b_rates"].merge(comp["b_sc"], on=["batter_id", "game_pk"], how="left")
+    game_dates = pd.read_sql(text(
+        "SELECT game_pk, game_date, first_pitch_utc FROM games WHERE is_final"),
+        get_engine())
+    game_dates["game_date"] = pd.to_datetime(game_dates["game_date"])
+    b = b.merge(game_dates[["game_pk", "game_date"]], on="game_pk")
+    b["woba"] = sum(b[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
+    # deviation from the expanding league wOBA at that date (E5b)
+    lg = {d: float(sum(prior(d)[CLASSES.index(c)] * wt
+                       for c, wt in WOBA_WEIGHTS.items()))
+          for d in b["game_date"].unique()}
+    b["woba_dev"] = b["woba"] - b["game_date"].map(lg)
+
+    # as-of lookup: a player's latest deviation strictly before a date
+    dev_book = {}
+    b_sorted = b.sort_values(["batter_id", "game_date"])
+    for pid, grp in b_sorted.groupby("batter_id", sort=False):
+        dev_book[pid] = (grp["game_date"].to_numpy(), grp["woba_dev"].to_numpy(float))
+
+    def dev_asof(pid, date64) -> float:
+        if pid not in dev_book:
+            return 0.0
+        dates, devs = dev_book[pid]
+        i = int(np.searchsorted(dates, date64, side="left"))
+        return float(devs[i - 1]) if i else 0.0
+
     lineups = pd.read_sql(text("""
         SELECT game_pk, player_id, team_id, batting_order
         FROM lineups WHERE batting_order BETWEEN 1 AND 9
     """), get_engine())
     df = lineups.merge(b, left_on=["player_id", "game_pk"],
                        right_on=["batter_id", "game_pk"], how="inner")
+    df = df.merge(game_dates[["game_pk", "first_pitch_utc"]], on="game_pk")
     df["w"] = df["batting_order"].map(SLOT_PA_WEIGHTS)
-    df["woba"] = sum(df[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
 
     src = {"LINEUP_WOBA": "woba", "LINEUP_K_RATE": "B_rate_K",
            "LINEUP_BB_RATE": "B_rate_BB", "LINEUP_HR_RATE": "B_rate_HR",
@@ -376,7 +405,42 @@ def _lineup_strength(max_date) -> dict:
             v = grp[col].to_numpy(float)
             m = ~np.isnan(v)
             row[feat] = float((v[m] * w[m]).sum() / w[m].sum()) if m.any() else np.nan
+        # E5b: slot-PA-weighted SUM of deviations — magnitude preserved
+        dev = grp["woba_dev"].to_numpy(float)
+        m = ~np.isnan(dev)
+        row["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
         out[(game_pk, team_id)] = row
+
+    # E5b missing-regular indicator: regulars = >=60% of the team's previous
+    # 15 posted lineups (all strictly past information); their absence today,
+    # weighted by appearance share and their as-of deviation.
+    hist = df[["game_pk", "game_date", "first_pitch_utc", "team_id", "player_id"]]
+    ordered = hist.sort_values(["game_date", "first_pitch_utc", "game_pk"])
+    for team_id, grp in ordered.groupby("team_id", sort=False):
+        entries = [(pk, d, set(g["player_id"]))
+                   for (pk, d), g in grp.groupby(["game_pk", "game_date"], sort=False)]
+        entries.sort(key=lambda e: (e[1], e[0]))
+        for i, (pk, date, players) in enumerate(entries):
+            window = entries[max(0, i - 15):i]
+            row = out.get((pk, team_id))
+            if row is None:
+                continue
+            if len(window) < 5:
+                row["LINEUP_MISSING_WOBA"] = np.nan
+                row["LINEUP_N_REG_OUT"] = np.nan
+                continue
+            counts: dict = {}
+            for _, _, past in window:
+                for p in past:
+                    counts[p] = counts.get(p, 0) + 1
+            missing_val, n_out = 0.0, 0
+            for p, cnt in counts.items():
+                share = cnt / len(window)
+                if share >= 0.6 and p not in players:
+                    n_out += 1
+                    missing_val += share * dev_asof(p, date.to_datetime64())
+            row["LINEUP_MISSING_WOBA"] = missing_val
+            row["LINEUP_N_REG_OUT"] = n_out
     log.info("lineup strength computed for %d team-games", len(out))
     return out
 
@@ -478,7 +542,77 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     return df
 
 
-def build_prediction_rows(slate: pd.DataFrame, asof_date: str) -> pd.DataFrame:
+def lineup_strength_asof(asof_date: str, projected: pd.DataFrame) -> dict:
+    """team_id -> LINEUP_* values for PROJECTED lineups (the daily path).
+
+    projected columns: team_id, player_id, lineup_slot. Rates come from
+    batter_features.build_asof (data through asof_date); missing-regular
+    compares the projection against the team's last 15 posted lineups.
+    Caveat until real lineups are consumed: the projection is the last posted
+    lineup, so 'missing regular' reflects yesterday's absences, not today's
+    scratches — rerunning after lineups post sharpens it.
+    """
+    from features import batter_features as bf
+    from features.batter_features import CLASSES
+
+    comp = bf.build_asof(asof_date)
+    pa = comp["pa"]
+    league = pa["outcome"].value_counts(normalize=True).reindex(CLASSES).fillna(0)
+    lg_woba = float(sum(league[c] * wt for c, wt in WOBA_WEIGHTS.items()))
+    b = comp["b_rates"].merge(comp["b_sc"], on="batter_id", how="left")
+    b["woba"] = sum(b[f"B_rate_{c}"] * wt for c, wt in WOBA_WEIGHTS.items())
+    b["woba_dev"] = b["woba"] - lg_woba
+    b = b.set_index("batter_id")
+
+    hist = pd.read_sql(text("""
+        SELECT l.team_id, l.game_pk, g.game_date, l.player_id
+        FROM lineups l JOIN games g USING (game_pk)
+        WHERE g.is_final AND g.game_date <= :asof
+          AND l.batting_order BETWEEN 1 AND 9
+    """), get_engine(), params={"asof": asof_date})
+
+    out = {}
+    for team_id, nine in projected.groupby("team_id"):
+        rows = nine.merge(b, left_on="player_id", right_index=True, how="left")
+        w = rows["lineup_slot"].map(SLOT_PA_WEIGHTS).to_numpy(float)
+        vals = {}
+        for feat, col in (("LINEUP_WOBA", "woba"), ("LINEUP_K_RATE", "B_rate_K"),
+                          ("LINEUP_BB_RATE", "B_rate_BB"), ("LINEUP_HR_RATE", "B_rate_HR"),
+                          ("LINEUP_XWOBA_CON", "B_XWOBA_CON"), ("LINEUP_SAMPLE_PA", "B_pa")):
+            v = rows[col].to_numpy(float)
+            m = ~np.isnan(v)
+            vals[feat] = float((v[m] * w[m]).sum() / w[m].sum()) if m.any() else np.nan
+        dev = rows["woba_dev"].to_numpy(float)
+        m = ~np.isnan(dev)
+        vals["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
+
+        team_hist = hist[hist["team_id"] == team_id]
+        recent = (team_hist.groupby(["game_pk", "game_date"])["player_id"].agg(set)
+                  .reset_index().sort_values(["game_date", "game_pk"]).tail(15))
+        if len(recent) < 5:
+            vals["LINEUP_MISSING_WOBA"] = np.nan
+            vals["LINEUP_N_REG_OUT"] = np.nan
+        else:
+            counts: dict = {}
+            for past in recent["player_id"]:
+                for p in past:
+                    counts[p] = counts.get(p, 0) + 1
+            today = set(nine["player_id"])
+            missing_val, n_out = 0.0, 0
+            for p, cnt in counts.items():
+                share = cnt / len(recent)
+                if share >= 0.6 and p not in today:
+                    n_out += 1
+                    if p in b.index:
+                        missing_val += share * float(b.loc[p, "woba_dev"])
+            vals["LINEUP_MISSING_WOBA"] = missing_val
+            vals["LINEUP_N_REG_OUT"] = n_out
+        out[team_id] = vals
+    return out
+
+
+def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
+                          lineups: pd.DataFrame | None = None) -> pd.DataFrame:
     """Feature rows for UNPLAYED games, using only data through asof_date.
 
     slate columns: game_pk, game_date, season, home_team_id, away_team_id,
@@ -507,6 +641,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str) -> pd.DataFrame:
     team_at = _team_date_lookup(team_games)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
+    lineup_vals = lineup_strength_asof(asof_date, lineups) if lineups is not None else {}
     ratings, last_season = team_rating.current_state(asof_date)
     park = _load_simple("SELECT season, venue_id, pf_runs FROM park_factors") \
         .set_index(["season", "venue_id"])["pf_runs"]
@@ -540,6 +675,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str) -> pd.DataFrame:
             team_id = g.home_team_id if side == "home" else g.away_team_id
             side_vals = team_at(team_id, g.season, game_date.to_datetime64())
             side_vals.update(bp(team_id, game_date.to_datetime64()))
+            side_vals.update(lineup_vals.get(team_id, {}))
             pid = getattr(g, f"{side}_probable_id")
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1

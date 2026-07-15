@@ -192,9 +192,10 @@ def fetch_slate(target_date: str) -> pd.DataFrame:
     return slate
 
 
-def predict_team(slate: pd.DataFrame, target_date: str, asof: str) -> pd.DataFrame:
+def predict_team(slate: pd.DataFrame, target_date: str, asof: str,
+                 lineups: pd.DataFrame | None = None) -> pd.DataFrame:
     bundle = _team_bundle(target_date)
-    rows = team_features.build_prediction_rows(slate, asof)
+    rows = team_features.build_prediction_rows(slate, asof, lineups=lineups)
     warnings = []
     out = []
     for name, model in (("lgbm_runs", bundle["model"]), ("elo", bundle["elo"])):
@@ -249,10 +250,12 @@ def _projected_lineups() -> pd.DataFrame:
     """), get_engine())
 
 
-def predict_batters(slate: pd.DataFrame, target_date: str, asof: str) -> pd.DataFrame:
+def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
+                    lineups: pd.DataFrame | None = None) -> pd.DataFrame:
     bundle = _batter_bundle(target_date)
     comp = bf.build_asof(asof)
-    lineups = _projected_lineups()
+    if lineups is None:
+        lineups = _projected_lineups()
     players = pd.read_sql(text("SELECT player_id, bats, throws FROM players"), get_engine())
 
     rows = []
@@ -377,8 +380,9 @@ def main() -> None:
     if slate.empty:
         log.info("no games scheduled for %s", target)
         return
-    team_preds = predict_team(slate, target, asof)
-    batter_preds = predict_batters(slate, target, asof)
+    projected = _projected_lineups()
+    team_preds = predict_team(slate, target, asof, lineups=projected)
+    batter_preds = predict_batters(slate, target, asof, lineups=projected)
     summarize(slate, team_preds, batter_preds)
     warnings = team_preds.attrs.get("warnings", []) + batter_preds.attrs.get("warnings", [])
     print(f"\n{'!!! ' + str(len(warnings)) + ' TRIPWIRE WARNINGS' if warnings else 'all sanity checks passed'}")

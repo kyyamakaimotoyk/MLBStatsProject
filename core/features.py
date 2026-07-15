@@ -23,7 +23,8 @@ BATTER_META_COLS = ["game_pk", "game_date", "season", "at_bat_index",
 FEATURE_FLAGS: dict[str, bool] = {
     "umpire": False,    # E3: HP umpire strikeout tendency (UMP_K_FACTOR)
     "wind_out": False,  # E3: signed out/in wind component (WIND_OUT_MPH)
-    "lineup": False,    # E5: posted-lineup strength from shrunken batter rates
+    "lineup": True,     # E5b SHIPPED 2026-07-15: lineup strength + missing regulars
+                        # (margin MAE p=.020, AUC p=.009 vs baseline)
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),

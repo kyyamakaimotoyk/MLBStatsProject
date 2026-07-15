@@ -151,6 +151,34 @@ default behavior unchanged).
 
 ---
 
+## E5b — 2026-07-15 — deviation + missing-regular lineup features: SHIPPED
+
+**Changes vs E5.** LINEUP_DEV_WOBA (slot-PA-weighted SUM of each starter's
+wOBA deviation from the expanding league rate — magnitude preserved instead
+of shrinkage-compressed) and the injury signal: LINEUP_MISSING_WOBA /
+LINEUP_N_REG_OUT, where regulars = >=60% of the team's previous 15 posted
+lineups and their absence is weighted by appearance share x as-of deviation.
+Snapshot v20260715_082809 (105 cols), leakage gate PASS.
+
+**Result (8,713 paired games).**
+- lgbm_runs+lineup2 vs lgbm_runs baseline: margin MAE 3.4946 vs 3.5055
+  (**p=.020**), AUC .5734 vs .5662 (**p=.009**), acc +0.6pp (p=.16) —
+  first change to clear the significance bar. SHIPS.
+- vs E5 v1 on the slim stack: better on acc (p=.055), AUC (p=.062), margin
+  (p=.096) — the sharper aggregation is what v1 lacked.
+- vs Elo (slim+lineup2): acc .5565 vs .5539 — ahead of Elo for the first
+  time, though within noise (p=.64); margin MAE and AUC at parity. Elo no
+  longer leads on any metric.
+
+**Decision.** FEATURE_FLAGS['lineup'] = True. Daily path wired:
+build_prediction_rows takes projected lineups via lineup_strength_asof
+(caveat: projection = last posted lineup until real lineups are consumed, so
+missing-regular reflects yesterday's absences pregame; rerunning after
+lineups post sharpens it). Team bundle invalidated to force retrain.
+Queued: E5c platoon-aware lineup rates; consume real lineups when posted.
+
+---
+
 ## B0 — 2026-07-15 — Phase 4 baseline: per-PA batter model vs shrunken marginals
 
 **Hypothesis.** An 8-class per-PA model (OUT/K/BB/HBP/1B/2B/3B/HR) with

@@ -3,14 +3,20 @@ resource "aws_security_group" "rds" {
   name        = "${var.project}-rds"
   description = "Postgres access for local development"
 
-  # Dev phase: only the home IP may reach Postgres. In Phase 6 the pipeline
-  # task security group gets its own ingress rule here.
   ingress {
     description = "Postgres from home IP"
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
     cidr_blocks = [var.home_ip_cidr]
+  }
+
+  ingress {
+    description     = "Postgres from the daily pipeline Fargate task"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.pipeline_task.id]
   }
 
   egress {

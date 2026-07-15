@@ -1,0 +1,11 @@
+.venv
+.git
+.idea
+logs
+infra
+web
+api
+docs
+.env
+*.log
+__pycache__

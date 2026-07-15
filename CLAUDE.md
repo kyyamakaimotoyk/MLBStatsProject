@@ -70,5 +70,20 @@ Model bundles live in S3 (`models/team_runs_latest.joblib`,
 `models/batter_pa_latest.joblib`) and retrain automatically when older than
 7 days — never ship a stale bundle silently (NBA calibration-incident lesson).
 
+## Web layer (local MVP)
+
+```powershell
+.venv\Scripts\uvicorn api.main:app --port 8000   # read-only API (model-free by design)
+cd web; npm run dev                              # Next.js frontend on :3000
+```
+
+## Automation (Phase 6)
+
+The daily pipeline runs on Fargate at 14:00 UTC via EventBridge Scheduler
+(`infra/schedule.tf`). Image: `Dockerfile.pipeline` -> ECR `mlb-stats-pipeline`.
+To ship pipeline code changes:
+`docker build -f Dockerfile.pipeline -t mlb-stats-pipeline .` then tag/push to
+ECR (`:latest`). Logs: CloudWatch `/ecs/mlb-stats-pipeline`.
+
 To retry ledger entries that exhausted their attempts:
 `UPDATE ingest_ledger SET attempts=0, status='pending' WHERE status='error';`

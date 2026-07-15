@@ -165,14 +165,27 @@ def fetch_slate(target_date: str) -> pd.DataFrame:
         })
     slate = pd.DataFrame(rows)
     if not slate.empty:
+        records = slate.astype(object).where(slate.notna(), None).to_dict("records")
         with get_engine().begin() as conn:
             conn.execute(text("""
                 INSERT INTO probable_pitchers (game_pk, source, home_pitcher_id, away_pitcher_id)
                 VALUES (:game_pk, 'daily', :home_probable_id, :away_probable_id)
-            """), slate[["game_pk", "home_probable_id", "away_probable_id"]]
-                 .astype(object).where(slate[["game_pk", "home_probable_id",
-                                              "away_probable_id"]].notna(), None)
-                 .to_dict("records"))
+            """), [{k: r[k] for k in ("game_pk", "home_probable_id", "away_probable_id")}
+                   for r in records])
+            # Skeleton rows so predictions for unplayed games can be labeled
+            # (matchup, date) by the API; the feed import overwrites on final.
+            conn.execute(text("""
+                INSERT INTO games (game_pk, season, game_type, game_date, status,
+                                   home_team_id, away_team_id, venue_id, day_night,
+                                   game_number, is_final)
+                VALUES (:game_pk, :season, :game_type, :game_date, 'Scheduled',
+                        :home_team_id, :away_team_id, :venue_id, :day_night,
+                        :game_number, FALSE)
+                ON CONFLICT (game_pk) DO NOTHING
+            """), [{k: r[k] for k in ("game_pk", "season", "game_type", "game_date",
+                                      "home_team_id", "away_team_id", "venue_id",
+                                      "day_night", "game_number")}
+                   for r in records])
     log.info("slate for %s: %d games (%d with both probables)", target_date, len(slate),
              int((slate["home_probable_id"].notna() & slate["away_probable_id"].notna()).sum())
              if not slate.empty else 0)

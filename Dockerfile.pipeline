@@ -1,0 +1,22 @@
+FROM python:3.14-slim
+
+# libgomp1: LightGBM runtime dependency
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY core core
+COPY ingestion ingestion
+COPY features features
+COPY modeling modeling
+COPY orchestration orchestration
+COPY validation validation
+COPY scripts scripts
+COPY migrations migrations
+
+# Credentials come from the ECS task role and env vars — no .env in the image.
+CMD ["python", "-m", "orchestration.daily"]

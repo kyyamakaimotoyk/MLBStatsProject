@@ -76,11 +76,19 @@ Model bundles live in S3 (`models/team_runs_latest.joblib`,
 `models/batter_pa_latest.joblib`) and retrain automatically when older than
 7 days — never ship a stale bundle silently (NBA calibration-incident lesson).
 
-## Web layer (local MVP)
+## Web layer
+
+Public site: **https://moundmodel.com** (S3+CloudFront static export) with the
+API at **https://api.moundmodel.com** (Fargate service behind an ALB).
+To ship site changes:
+`cd web; $env:NEXT_PUBLIC_API_URL="https://api.moundmodel.com"; npm run build`
+then `aws s3 sync out s3://mlb-stats-site-583686634997 --delete` + CloudFront
+invalidation. To ship API changes: build `Dockerfile.api`, push to ECR
+`mlb-stats-api`, then `aws ecs update-service --force-new-deployment`.
 
 ```powershell
-.venv\Scripts\uvicorn api.main:app --port 8000   # read-only API (model-free by design)
-cd web; npm run dev                              # Next.js frontend on :3000
+.venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
+cd web; npm run dev                              # local frontend on :3000
 ```
 
 ## Automation (Phase 6)

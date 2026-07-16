@@ -4,7 +4,6 @@
 logs
 infra
 web
-api
 docs
 .env
 *.log

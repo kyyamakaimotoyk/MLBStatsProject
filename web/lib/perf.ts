@@ -68,6 +68,19 @@ export function confusion(rows: ResultRow[]) {
   return { homePickHomeWin, homePickAwayWin, awayPickHomeWin, awayPickAwayWin };
 }
 
+// P(X >= k) for X ~ Poisson(lambda): the model-implied chance of clearing a
+// counting-stat line, given the player model's expected value for tonight.
+export function poissonTail(lambda: number, k: number): number {
+  if (k <= 0) return 1;
+  let term = Math.exp(-lambda);
+  let cdf = term;
+  for (let i = 1; i < k; i += 1) {
+    term *= lambda / i;
+    cdf += term;
+  }
+  return Math.max(0, 1 - cdf);
+}
+
 export function marginMissHistogram(rows: ResultRow[]) {
   // signed miss: predicted margin minus actual margin, 1-run bins, clamped
   const bins = new Map<number, number>();

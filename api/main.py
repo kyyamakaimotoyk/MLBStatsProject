@@ -93,7 +93,7 @@ def batters(date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
     """Per-batter predictions for a date, best HR probability first."""
     rows = _df("""
         SELECT g.game_pk, ht.abbrev AS home, at.abbrev AS away,
-               pl.full_name AS batter, sp.full_name AS probable_pitcher,
+               b.player_id, pl.full_name AS batter, sp.full_name AS probable_pitcher,
                b.lineup_slot, b.exp_pa, b.exp_h, b.exp_tb, b.exp_hr, b.exp_bb, b.exp_k,
                b.p_hit, b.p_hr, b.p_tb2, b.p_bb, b.model_version
         FROM batter_predictions b

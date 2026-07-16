@@ -10,6 +10,7 @@ type BatterRow = {
   game_pk: number;
   home: string;
   away: string;
+  player_id: number;
   batter: string;
   probable_pitcher: string | null;
   p_hit: number | null;
@@ -93,7 +94,14 @@ export default function PlayersPage() {
               <tbody>
                 {board.slice(0, 40).map((r, i) => (
                   <tr key={`${r.game_pk}-${i}`} className="border-t border-zinc-200 dark:border-zinc-800">
-                    <td className="px-3 py-2 font-medium">{r.batter}</td>
+                    <td className="px-3 py-2 font-medium">
+                      <Link
+                        href={`/players/${r.player_id}`}
+                        className="hover:text-[var(--accent-text)] hover:underline"
+                      >
+                        {r.batter}
+                      </Link>
+                    </td>
                     <td className="px-3 py-2 text-zinc-500">
                       {r.away} @ {r.home}
                     </td>

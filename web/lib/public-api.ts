@@ -56,26 +56,104 @@ export type TeamDetail = {
   }[];
 };
 
+export type BattingGame = {
+  game_date: string;
+  season: number;
+  home: string;
+  away: string;
+  home_score: number | null;
+  away_score: number | null;
+  pa: number | null;
+  ab: number | null;
+  r: number | null;
+  h: number | null;
+  hr: number | null;
+  tb: number | null;
+  rbi: number | null;
+  bb: number | null;
+  k: number | null;
+  sb: number | null;
+  exp_h: number | null;
+  exp_tb: number | null;
+  exp_hr: number | null;
+  exp_bb: number | null;
+  exp_k: number | null;
+  p_hit: number | null;
+  p_hr: number | null;
+};
+
+export type PitchingGame = {
+  game_date: string;
+  season: number;
+  home: string;
+  away: string;
+  home_score: number | null;
+  away_score: number | null;
+  is_starter: boolean | null;
+  outs: number | null;
+  h: number | null;
+  er: number | null;
+  bb: number | null;
+  k: number | null;
+  hr: number | null;
+  pitches: number | null;
+};
+
 export type PlayerDetail = {
   player_id: number;
   name: string;
-  l15_hits_per_game: number | null;
-  l15_hr: number;
-  games: {
-    game_date: string;
-    home: string;
-    away: string;
-    pa: number | null;
-    h: number | null;
-    hr: number | null;
-    tb: number | null;
-    bb: number | null;
-    k: number | null;
-    exp_h: number | null;
-    p_hit: number | null;
-    p_hr: number | null;
-  }[];
+  position: string | null;
+  batting: {
+    season: {
+      season: number;
+      games: number;
+      pa: number;
+      avg: number | null;
+      obp: number | null;
+      slg: number | null;
+      ops: number | null;
+      hr: number;
+      rbi: number;
+      sb: number;
+    } | null;
+    games: BattingGame[];
+  } | null;
+  pitching: {
+    season: {
+      season: number;
+      games: number;
+      starts: number;
+      ip: number;
+      era: number | null;
+      whip: number | null;
+      k9: number | null;
+      so: number;
+    } | null;
+    games: PitchingGame[];
+  } | null;
+  latest_pred: {
+    exp_pa: number;
+    exp_h: number;
+    exp_tb: number;
+    exp_hr: number;
+    exp_bb: number;
+    exp_k: number;
+    p_hit: number;
+    p_hr: number;
+    for_date: string;
+  } | null;
 };
+
+export type TeamTrends = {
+  season: number;
+  stat: string;
+  series: { team: string; points: { date: string; value: number; rolling: number | null }[] }[];
+};
+
+export const getTeamTrends = (stat: string, teams: string[], season?: number) =>
+  getJSON<TeamTrends>(
+    `/api/public/team-trends?stat=${stat}&teams=${teams.join(",")}${season ? `&season=${season}` : ""}`,
+  );
 
 export type TeamRow = {
   team_id: number;

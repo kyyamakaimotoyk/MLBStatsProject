@@ -34,6 +34,10 @@ body {
 :root {
   --series-1: #eb6834;
   --series-2: #2a78d6;
+  --series-3: #008300;
+  --series-4: #e87ba4;
+  --series-5: #eda100;
+  --series-6: #1baf7a;
   --accent-mark: #eb6834;
   --accent-text: #c2410c;
   --good-bg: #d3f1de;
@@ -51,6 +55,10 @@ body {
   :root {
     --series-1: #d95926;
     --series-2: #3987e5;
+    --series-3: #008300;
+    --series-4: #d55181;
+    --series-5: #c98500;
+    --series-6: #199e70;
     --accent-mark: #d95926;
     --accent-text: #fb923c;
     --good-bg: #123f2a;

@@ -182,36 +182,167 @@ def team(abbrev: str, days: int = Query(45, le=120)):
 
 
 @router.get("/api/public/player/{player_id}")
-def player(player_id: int, days: int = Query(45, le=120)):
-    """A batter's recent game log with our calls graded."""
+def player(player_id: int, days: int = Query(250, le=500)):
+    """A player's full profile: batting game log + season rates, pitching
+    game log + season rates (two-way players show both), our latest model
+    numbers, and calls graded per game."""
     engine = get_engine()
     name = pd.read_sql(text(
-        "SELECT full_name FROM players WHERE player_id = :p"), engine,
-        params={"p": player_id})
+        "SELECT full_name, primary_position FROM players WHERE player_id = :p"),
+        engine, params={"p": player_id})
     if name.empty:
         raise HTTPException(404, "unknown player")
-    df = pd.read_sql(text("""
-        SELECT g.game_date::text AS game_date, ht.abbrev AS home, at.abbrev AS away,
-               bg.pa, bg.h, bg.hr, bg.tb, bg.bb, bg.so AS k,
-               bp.exp_h, bp.p_hit, bp.p_hr
+
+    bat = pd.read_sql(text("""
+        SELECT g.game_date::text AS game_date, g.season,
+               ht.abbrev AS home, at.abbrev AS away,
+               g.home_score, g.away_score,
+               bg.pa, bg.ab, bg.r, bg.h, bg.doubles, bg.triples, bg.hr, bg.tb,
+               bg.rbi, bg.bb, bg.so AS k, bg.hbp, bg.sf, bg.sb,
+               bp.exp_h, bp.exp_tb, bp.exp_hr, bp.exp_bb, bp.exp_k,
+               bp.p_hit, bp.p_hr
         FROM batter_game_lines bg
         JOIN games g USING (game_pk)
         JOIN teams ht ON ht.team_id = g.home_team_id
         JOIN teams at ON at.team_id = g.away_team_id
-        LEFT JOIN batter_predictions bp
-          ON bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
+        LEFT JOIN LATERAL (
+            SELECT * FROM batter_predictions bp
+            WHERE bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
+            ORDER BY (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+            LIMIT 1
+        ) bp ON TRUE
         WHERE bg.player_id = :p AND g.is_final
           AND g.game_date >= current_date - :days
         ORDER BY g.game_date DESC
     """), engine, params={"p": player_id, "days": days})
-    recent = df.head(15)
+
+    pit = pd.read_sql(text("""
+        SELECT g.game_date::text AS game_date, g.season,
+               ht.abbrev AS home, at.abbrev AS away,
+               g.home_score, g.away_score,
+               pg.is_starter, pg.outs, pg.batters_faced, pg.h, pg.r, pg.er,
+               pg.bb, pg.so AS k, pg.hr, pg.pitches
+        FROM pitcher_game_lines pg
+        JOIN games g USING (game_pk)
+        JOIN teams ht ON ht.team_id = g.home_team_id
+        JOIN teams at ON at.team_id = g.away_team_id
+        WHERE pg.player_id = :p AND g.is_final
+          AND g.game_date >= current_date - :days
+        ORDER BY g.game_date DESC
+    """), engine, params={"p": player_id, "days": days})
+
+    def batting_season(df: pd.DataFrame) -> dict | None:
+        season = df[df["season"] == df["season"].max()] if len(df) else df
+        if season.empty:
+            return None
+        ab = season["ab"].sum()
+        h = season["h"].sum()
+        bb = season["bb"].sum()
+        hbp = season["hbp"].fillna(0).sum()
+        sf = season["sf"].fillna(0).sum()
+        tb = season["tb"].sum()
+        obp_den = ab + bb + hbp + sf
+        avg = h / ab if ab else None
+        obp = (h + bb + hbp) / obp_den if obp_den else None
+        slg = tb / ab if ab else None
+        return {
+            "season": int(season["season"].max()),
+            "games": int(len(season)),
+            "pa": int(season["pa"].sum()),
+            "avg": float(avg) if avg is not None else None,
+            "obp": float(obp) if obp is not None else None,
+            "slg": float(slg) if slg is not None else None,
+            "ops": float(obp + slg) if obp is not None and slg is not None else None,
+            "hr": int(season["hr"].sum()),
+            "rbi": int(season["rbi"].sum()),
+            "sb": int(season["sb"].fillna(0).sum()),
+        }
+
+    def pitching_season(df: pd.DataFrame) -> dict | None:
+        season = df[df["season"] == df["season"].max()] if len(df) else df
+        if season.empty:
+            return None
+        outs = season["outs"].fillna(0).sum()
+        ip = outs / 3.0
+        er = season["er"].fillna(0).sum()
+        bb = season["bb"].fillna(0).sum()
+        h = season["h"].fillna(0).sum()
+        k = season["k"].fillna(0).sum()
+        return {
+            "season": int(season["season"].max()),
+            "games": int(len(season)),
+            "starts": int(season["is_starter"].fillna(False).sum()),
+            "ip": float(ip),
+            "era": float(er / ip * 9) if ip else None,
+            "whip": float((bb + h) / ip) if ip else None,
+            "k9": float(k / ip * 9) if ip else None,
+            "so": int(k),
+        }
+
+    latest_pred = pd.read_sql(text("""
+        SELECT bp.exp_pa, bp.exp_h, bp.exp_tb, bp.exp_hr, bp.exp_bb, bp.exp_k,
+               bp.p_hit, bp.p_hr, g.game_date::text AS for_date
+        FROM batter_predictions bp
+        JOIN games g ON g.game_pk = bp.game_pk
+        WHERE bp.player_id = :p
+        ORDER BY g.game_date DESC,
+                 (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+        LIMIT 1
+    """), engine, params={"p": player_id})
+
     return {
         "player_id": player_id,
         "name": name["full_name"].iloc[0],
-        "l15_hits_per_game": float(recent["h"].mean()) if len(recent) else None,
-        "l15_hr": int(recent["hr"].sum()) if len(recent) else 0,
-        "games": _clean(df),
+        "position": name["primary_position"].iloc[0],
+        "batting": {"season": batting_season(bat), "games": _clean(bat)}
+        if len(bat) else None,
+        "pitching": {"season": pitching_season(pit), "games": _clean(pit)}
+        if len(pit) else None,
+        "latest_pred": _clean(latest_pred)[0] if len(latest_pred) else None,
     }
+
+
+@router.get("/api/public/team-trends")
+def team_trends(stat: str = Query("runs_scored"),
+                teams: str = Query(...),
+                season: int | None = Query(None)):
+    """Per-game team stat with a rolling 10-game mean, for the trends chart."""
+    if stat not in ("runs_scored", "runs_allowed", "run_diff", "total_runs"):
+        raise HTTPException(400, "unknown stat")
+    abbrevs = [t.strip().upper() for t in teams.split(",") if t.strip()][:6]
+    engine = get_engine()
+    if season is None:
+        season = int(pd.read_sql(text(
+            "SELECT max(season) AS s FROM games WHERE is_final"), engine)["s"].iloc[0])
+    df = pd.read_sql(text("""
+        SELECT g.game_date::text AS game_date, g.first_pitch_utc,
+               ht.abbrev AS home, at.abbrev AS away, g.home_score, g.away_score
+        FROM games g
+        JOIN teams ht ON ht.team_id = g.home_team_id
+        JOIN teams at ON at.team_id = g.away_team_id
+        WHERE g.is_final AND g.season = :s
+          AND (ht.abbrev = ANY(:teams) OR at.abbrev = ANY(:teams))
+        ORDER BY g.game_date, g.first_pitch_utc
+    """), engine, params={"s": season, "teams": abbrevs})
+    series = []
+    for ab in abbrevs:
+        mine = df[(df["home"] == ab) | (df["away"] == ab)].copy()
+        if mine.empty:
+            continue
+        is_home = mine["home"] == ab
+        scored = np.where(is_home, mine["home_score"], mine["away_score"]).astype(float)
+        allowed = np.where(is_home, mine["away_score"], mine["home_score"]).astype(float)
+        value = {"runs_scored": scored, "runs_allowed": allowed,
+                 "run_diff": scored - allowed,
+                 "total_runs": scored + allowed}[stat]
+        rolling = pd.Series(value).rolling(10, min_periods=3).mean()
+        series.append({
+            "team": ab,
+            "points": [{"date": d, "value": float(v),
+                        "rolling": (float(r) if pd.notna(r) else None)}
+                       for d, v, r in zip(mine["game_date"], value, rolling)],
+        })
+    return {"season": season, "stat": stat, "series": series}
 
 
 @router.get("/api/public/results")

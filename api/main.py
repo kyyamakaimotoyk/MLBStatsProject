@@ -33,6 +33,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from api.public import router as public_router  # noqa: E402
+
+app.include_router(public_router)
+
 
 def _df(sql: str, **params) -> list[dict]:
     df = pd.read_sql(text(sql), get_engine(), params=params or None)

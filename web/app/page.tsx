@@ -1,132 +1,127 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getJSON, fmtNum, fmtOdds, fmtPct } from "@/lib/api";
+import Link from "next/link";
+import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
+import { copy, pctLabel } from "@/lib/copy";
+import { PicksTable, ProofChip } from "@/components/shared";
 
-type Prediction = {
-  game_pk: number;
-  game_date: string;
-  status: string | null;
-  home: string;
-  away: string;
-  home_score: number | null;
-  away_score: number | null;
-  is_final: boolean;
-  model_type: string;
-  p_home: number | null;
-  pred_margin: number | null;
-  pred_total: number | null;
-  ml_home: number | null;
-  ml_away: number | null;
-  market_total: number | null;
-  market_p_home: number | null;
-  market_is_closing: boolean | null;
-};
-
-function Edge({ model, market }: { model: number | null; market: number | null }) {
-  if (model == null || market == null) return <span className="text-zinc-400">—</span>;
-  const edge = model - market;
-  const cls =
-    Math.abs(edge) < 0.03
-      ? "text-zinc-500"
-      : edge > 0
-        ? "text-emerald-600 dark:text-emerald-400"
-        : "text-rose-600 dark:text-rose-400";
-  return (
-    <span className={cls}>
-      {edge > 0 ? "+" : ""}
-      {(edge * 100).toFixed(1)}pp
-    </span>
-  );
-}
-
-function tomorrowOrToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export default function PicksPage() {
-  const [date, setDate] = useState(tomorrowOrToday());
-  const [rows, setRows] = useState<Prediction[] | null>(null);
+export default function HomePage() {
+  const [feed, setFeed] = useState<Feed | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showDays, setShowDays] = useState(4);
 
   useEffect(() => {
-    setRows(null);
-    setError(null);
-    getJSON<Prediction[]>(`/api/predictions?date=${date}`)
-      .then(setRows)
-      .catch((e) => setError(String(e)));
-  }, [date]);
+    getFeed(10).then(setFeed).catch((e) => setError(String(e)));
+    getSummary().then(setSummary).catch(() => {});
+  }, []);
 
-  const games = new Map<number, Prediction[]>();
-  rows?.forEach((r) => {
-    games.set(r.game_pk, [...(games.get(r.game_pk) ?? []), r]);
-  });
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const tonight = feed?.days.find((d) => d.date === todayStr);
+  const past = (feed?.days ?? []).filter((d) => d.date !== todayStr);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Game predictions</h1>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-        />
-      </div>
-      {error && (
-        <p className="text-sm text-zinc-500">No predictions for {date}.</p>
-      )}
-      {!rows && !error && <p className="text-sm text-zinc-500">Loading…</p>}
-      {rows && (
-        <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
-              <tr>
-                <th className="px-3 py-2">Matchup</th>
-                <th className="px-3 py-2">Model</th>
-                <th className="px-3 py-2 text-right">P(home)</th>
-                <th className="px-3 py-2 text-right">Margin</th>
-                <th className="px-3 py-2 text-right">Total</th>
-                <th className="px-3 py-2 text-right">Market ML</th>
-                <th className="px-3 py-2 text-right">Mkt P(home)</th>
-                <th className="px-3 py-2 text-right">Edge</th>
-                <th className="px-3 py-2 text-right">Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...games.values()].flat().map((r) => (
-                <tr
-                  key={`${r.game_pk}-${r.model_type}`}
-                  className="border-t border-zinc-200 dark:border-zinc-800"
-                >
-                  <td className="px-3 py-2 font-medium">
-                    {r.away} @ {r.home}
-                  </td>
-                  <td className="px-3 py-2 text-zinc-500">{r.model_type}</td>
-                  <td className="px-3 py-2 text-right">{fmtPct(r.p_home)}</td>
-                  <td className="px-3 py-2 text-right">
-                    {r.pred_margin != null && r.pred_margin > 0 ? "+" : ""}
-                    {fmtNum(r.pred_margin)}
-                  </td>
-                  <td className="px-3 py-2 text-right">{fmtNum(r.pred_total)}</td>
-                  <td className="px-3 py-2 text-right text-zinc-500">
-                    {r.ml_home != null
-                      ? `${fmtOdds(r.ml_home)} / ${fmtOdds(r.ml_away)}${r.market_is_closing ? "" : " (am)"}`
-                      : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right">{fmtPct(r.market_p_home)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <Edge model={r.p_home} market={r.market_p_home} />
-                  </td>
-                  <td className="px-3 py-2 text-right text-zinc-500">
-                    {r.is_final ? `${r.away_score}–${r.home_score}` : r.status ?? "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="space-y-10">
+      <section className="space-y-4 pt-4 text-center">
+        <h1 className="text-3xl font-bold">{copy.site.tagline}</h1>
+        <p className="mx-auto max-w-2xl text-zinc-600 dark:text-zinc-400">
+          {copy.site.subtitle}
+        </p>
+        <div className="flex justify-center gap-3">
+          <a
+            href="#tonight"
+            className="rounded bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+          >
+            {copy.site.ctaTonight}
+          </a>
+          <Link
+            href="/record"
+            className="rounded border border-zinc-300 px-4 py-2 text-sm font-semibold hover:border-orange-500 dark:border-zinc-700"
+          >
+            {copy.site.ctaRecord}
+          </Link>
         </div>
-      )}
+        {summary && (
+          <div className="mx-auto flex max-w-2xl flex-wrap justify-center gap-3 pt-2">
+            <ProofChip
+              metric={pctLabel(
+                summary.last30_wins / Math.max(summary.last30_wins + summary.last30_losses, 1),
+              )}
+              line1={copy.proof.winners("last 30 days")}
+              line2={`${summary.last30_wins}–${summary.last30_losses}`}
+            />
+            <ProofChip
+              metric={`±${summary.avg_score_error.toFixed(1)} runs`}
+              line1={copy.proof.scoreMiss(`since ${summary.since.slice(0, 4)}`)}
+            />
+            <ProofChip
+              metric={summary.games_graded.toLocaleString()}
+              line1={copy.proof.logged}
+              line2={copy.proof.loggedSub}
+            />
+          </div>
+        )}
+      </section>
+
+      <section id="tonight" className="space-y-3">
+        <h2 className="text-lg font-semibold">
+          {tonight ? `Predictions for ${tonight.date}` : "No games tonight"}
+        </h2>
+        {error && <p className="text-sm text-zinc-500">Predictions are loading late — check back shortly.</p>}
+        {!feed && !error && <p className="text-sm text-zinc-500">Loading tonight's picks…</p>}
+        {tonight && <PicksTable games={tonight.games} />}
+        {tonight && tonight.games.some((g) => g.watch.length > 0) && (
+          <div className="rounded border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+            <div className="mb-1 font-semibold text-zinc-600 dark:text-zinc-400">
+              Hitters to watch tonight
+            </div>
+            <div className="flex flex-wrap gap-x-6 gap-y-1">
+              {tonight.games
+                .flatMap((g) => g.watch.map((w) => ({ ...w, game: `${g.away}@${g.home}` })))
+                .sort((a, b) => b.p_hr - a.p_hr)
+                .slice(0, 6)
+                .map((w) => (
+                  <span key={`${w.game}-${w.name}`} className="text-zinc-600 dark:text-zinc-300">
+                    <span className="font-medium">{w.name}</span>{" "}
+                    <span className="text-zinc-400">({w.game})</span> ·{" "}
+                    {pctLabel(w.p_hr)} to homer
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-semibold">Recent results</h2>
+        {past.slice(0, showDays).map((d) => (
+          <div key={d.date} className="space-y-2">
+            <h3 className="text-sm font-semibold text-zinc-500">{d.date}</h3>
+            <PicksTable games={d.games} />
+          </div>
+        ))}
+        {past.length > showDays && (
+          <button
+            onClick={() => setShowDays((n) => n + 4)}
+            className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:border-orange-500 dark:border-zinc-700"
+          >
+            Show more days
+          </button>
+        )}
+      </section>
+
+      <section className="grid gap-4 border-t border-zinc-200 pt-8 sm:grid-cols-4 dark:border-zinc-800">
+        {copy.steps.map((s, i) => (
+          <div key={s.title} className="space-y-1">
+            <div className="text-xs font-bold text-orange-500">STEP {i + 1}</div>
+            <div className="font-semibold">{s.title}</div>
+            <p className="text-sm text-zinc-500">{s.body}</p>
+          </div>
+        ))}
+      </section>
+
+      <p className="pb-4 text-center text-xs text-zinc-400">{copy.site.disclaimer}</p>
     </div>
   );
 }

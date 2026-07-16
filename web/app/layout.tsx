@@ -19,9 +19,11 @@ export const metadata: Metadata = {
 };
 
 const nav = [
-  { href: "/", label: "Picks" },
-  { href: "/batters", label: "Batters" },
-  { href: "/performance", label: "Performance" },
+  { href: "/", label: "Tonight" },
+  { href: "/record", label: "Record" },
+  { href: "/teams", label: "Teams" },
+  { href: "/players", label: "Players" },
+  { href: "/performance", label: "Model lab" },
 ];
 
 export default function RootLayout({

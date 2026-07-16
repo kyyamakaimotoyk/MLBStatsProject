@@ -24,6 +24,7 @@ const nav = [
   { href: "/teams", label: "Teams" },
   { href: "/players", label: "Players" },
   { href: "/performance", label: "Model lab" },
+  { href: "/about", label: "About" },
 ];
 
 export default function RootLayout({

@@ -3,19 +3,31 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
+import { getJSON } from "@/lib/api";
+import { ResultRow } from "@/lib/perf";
 import { copy, pctLabel } from "@/lib/copy";
-import { PicksTable, ProofChip } from "@/components/shared";
+import { PicksTable, ProofChip, WindowSelect } from "@/components/shared";
+import { daysBack, sinceDate, WindowKey } from "@/lib/windows";
 
 export default function HomePage() {
   const [feed, setFeed] = useState<Feed | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [rows, setRows] = useState<ResultRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDays, setShowDays] = useState(4);
+  const [win, setWin] = useState<WindowKey>("1m");
 
   useEffect(() => {
-    getFeed(10).then(setFeed).catch((e) => setError(String(e)));
     getSummary().then(setSummary).catch(() => {});
+    getJSON<ResultRow[]>("/api/public/results").then(setRows).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setFeed(null);
+    getFeed(Math.min(daysBack(win), 90))
+      .then(setFeed)
+      .catch((e) => setError(String(e)));
+  }, [win]);
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const tonight = feed?.days.find((d) => d.date === todayStr);
@@ -95,7 +107,13 @@ export default function HomePage() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Recent results</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Recent results</h2>
+          <WindowSelect value={win} onChange={setWin} />
+        </div>
+        {rows && (
+          <WindowRecordLine rows={rows} winKey={win} />
+        )}
         {past.slice(0, showDays).map((d) => (
           <div key={d.date} className="space-y-2">
             <h3 className="text-sm font-semibold text-zinc-500">{d.date}</h3>
@@ -109,6 +127,16 @@ export default function HomePage() {
           >
             Show more days
           </button>
+        )}
+        {daysBack(win) > 90 && (
+          <p className="text-xs text-zinc-400">
+            Day-by-day tables cover the most recent 90 days; the record line
+            above covers the whole window. The full breakdown lives on the{" "}
+            <a href="/record" className="underline">
+              Record
+            </a>{" "}
+            page.
+          </p>
         )}
       </section>
 
@@ -126,5 +154,22 @@ export default function HomePage() {
 
       <p className="pb-4 text-center text-xs text-zinc-400">{copy.site.disclaimer}</p>
     </div>
+  );
+}
+
+function WindowRecordLine({ rows, winKey }: { rows: ResultRow[]; winKey: WindowKey }) {
+  const since = sinceDate(winKey);
+  const view = rows.filter((r) => r.game_date >= since);
+  if (view.length === 0) return null;
+  const correct = view.filter((r) => (r.p_home >= 0.5) === r.home_won).length;
+  return (
+    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      Over this window:{" "}
+      <span className="font-semibold">
+        {correct.toLocaleString()}–{(view.length - correct).toLocaleString()}
+      </span>{" "}
+      picking winners ({pctLabel(correct / view.length)} across{" "}
+      {view.length.toLocaleString()} games).
+    </p>
   );
 }

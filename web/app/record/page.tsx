@@ -5,7 +5,8 @@ import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
 import { getJSON } from "@/lib/api";
 import { ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
-import { PicksStrip, ProofChip } from "@/components/shared";
+import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
+import { sinceDate, WindowKey } from "@/lib/windows";
 import {
   ConfusionMatrix,
   MarginMissChart,
@@ -17,6 +18,7 @@ export default function RecordPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [feed, setFeed] = useState<Feed | null>(null);
   const [rows, setRows] = useState<ResultRow[] | null>(null);
+  const [win, setWin] = useState<WindowKey>("3m");
 
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
@@ -29,39 +31,63 @@ export default function RecordPage() {
     .filter((g) => g.correct != null)
     .reverse();
 
+  const since = sinceDate(win);
+  const view = (rows ?? []).filter((r) => r.game_date >= since);
+  const correct = view.filter((r) => (r.p_home >= 0.5) === r.home_won).length;
+  const marginMiss = view.length
+    ? view.reduce((s, r) => s + Math.abs(r.pred_margin - r.margin), 0) / view.length
+    : null;
+  const totalMiss = view.filter((r) => r.pred_total != null && r.total != null);
+  const totalMissAvg = totalMiss.length
+    ? totalMiss.reduce((s, r) => s + Math.abs((r.pred_total ?? 0) - (r.total ?? 0)), 0) /
+      totalMiss.length
+    : null;
+
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">The track record</h1>
-        <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Every prediction gets graded against the final score — the good calls
-          and the bad ones. Nothing is deleted, nothing is cherry-picked.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">The track record</h1>
+          <p className="mt-1 text-zinc-600 dark:text-zinc-400">
+            Every prediction gets graded against the final score — the good calls
+            and the bad ones. Nothing is deleted, nothing is cherry-picked.
+          </p>
+        </div>
+        <WindowSelect value={win} onChange={setWin} />
       </div>
 
-      {summary && (
+      {view.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <ProofChip
-            metric={pctLabel(summary.winners_pct)}
+            metric={pctLabel(correct / view.length)}
             line1="winners called"
-            line2={`across ${summary.games_graded.toLocaleString()} games since ${summary.since}`}
+            line2={`${correct.toLocaleString()}–${(view.length - correct).toLocaleString()} over this window`}
           />
           <ProofChip
-            metric={`${summary.last30_wins}–${summary.last30_losses}`}
-            line1="last 30 days"
-            line2="picking the winner"
+            metric={view.length.toLocaleString()}
+            line1="games graded"
+            line2={`since ${since}`}
           />
           <ProofChip
-            metric={`±${summary.avg_score_error.toFixed(1)} runs`}
+            metric={marginMiss != null ? `±${marginMiss.toFixed(1)} runs` : "—"}
             line1="average score miss"
-            line2={`total-runs miss ±${summary.avg_total_error.toFixed(1)}`}
+            line2={
+              totalMissAvg != null ? `total-runs miss ±${totalMissAvg.toFixed(1)}` : undefined
+            }
           />
           <ProofChip
-            metric={pctLabel(summary.batter_hit_call_pct)}
+            metric={pctLabel(summary?.batter_hit_call_pct)}
             line1="hitter calls right"
-            line2={`"gets a hit tonight?" — ${summary.batter_calls_graded.toLocaleString()} graded`}
+            line2={
+              summary
+                ? `"gets a hit tonight?" — ${summary.batter_calls_graded.toLocaleString()} graded, all time`
+                : undefined
+            }
           />
         </div>
+      )}
+      {rows && view.length === 0 && (
+        <p className="text-sm text-zinc-500">No graded games in this window yet.</p>
       )}
 
       <section className="space-y-2">
@@ -78,16 +104,21 @@ export default function RecordPage() {
         )}
       </section>
 
-      {rows && rows.length > 100 && (
+      {view.length > 100 && (
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Under the hood</h2>
           <div className="grid gap-4 lg:grid-cols-2">
-            <SkillCurveChart rows={rows} />
-            <RocChart rows={rows} />
-            <MarginMissChart rows={rows} />
-            <ConfusionMatrix rows={rows} />
+            <SkillCurveChart rows={view} />
+            <RocChart rows={view} />
+            <MarginMissChart rows={view} />
+            <ConfusionMatrix rows={view} />
           </div>
         </section>
+      )}
+      {view.length > 0 && view.length <= 100 && (
+        <p className="text-xs text-zinc-400">
+          Charts appear once a window has more than 100 graded games.
+        </p>
       )}
 
       <p className="text-xs text-zinc-400">

@@ -120,7 +120,7 @@ def summary():
 
 
 @router.get("/api/public/feed")
-def feed(days: int = Query(7, le=30)):
+def feed(days: int = Query(7, le=90)):
     """Tonight's picks + the last N days graded, one call, newest first."""
     df = _graded_games(days)
     if df.empty:

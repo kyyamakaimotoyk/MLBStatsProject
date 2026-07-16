@@ -2,6 +2,29 @@
 
 import { FeedGame } from "@/lib/public-api";
 import { copy, finalScore, pctLabel, scoreCall } from "@/lib/copy";
+import { WINDOW_OPTIONS, WindowKey } from "@/lib/windows";
+
+export function WindowSelect({
+  value,
+  onChange,
+}: {
+  value: WindowKey;
+  onChange: (k: WindowKey) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as WindowKey)}
+      className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+    >
+      {WINDOW_OPTIONS.map((o) => (
+        <option key={o.key} value={o.key}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 export function ProofChip({
   metric,

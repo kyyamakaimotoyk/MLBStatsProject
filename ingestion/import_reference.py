@@ -61,6 +61,7 @@ def import_venues() -> int:
     for v in statsapi_client.venues():
         location = v.get("location", {})
         field_info = v.get("fieldInfo", {})
+        coords = location.get("defaultCoordinates") or {}
         elevation = location.get("elevation")
         rows.append({
             "venue_id": v["id"],
@@ -70,18 +71,21 @@ def import_venues() -> int:
             "elevation": int(elevation) if elevation else None,
             "roof_type": field_info.get("roofType"),
             "capacity": field_info.get("capacity"),
+            "latitude": coords.get("latitude"),
+            "longitude": coords.get("longitude"),
         })
     with get_engine().begin() as conn:
         conn.execute(
             text("""
                 INSERT INTO venues (venue_id, name, city, state, elevation,
-                                    roof_type, capacity)
+                                    roof_type, capacity, latitude, longitude)
                 VALUES (:venue_id, :name, :city, :state, :elevation,
-                        :roof_type, :capacity)
+                        :roof_type, :capacity, :latitude, :longitude)
                 ON CONFLICT (venue_id) DO UPDATE SET
                     name = EXCLUDED.name, city = EXCLUDED.city,
                     state = EXCLUDED.state, elevation = EXCLUDED.elevation,
                     roof_type = EXCLUDED.roof_type, capacity = EXCLUDED.capacity,
+                    latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
                     updated_at = now()
             """),
             rows,

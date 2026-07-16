@@ -675,7 +675,8 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame,
 
 
 def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
-                          lineups: pd.DataFrame | None = None) -> pd.DataFrame:
+                          lineups: pd.DataFrame | None = None,
+                          weather: dict | None = None) -> pd.DataFrame:
     """Feature rows for UNPLAYED games, using only data through asof_date.
 
     slate columns: game_pk, game_date, season, home_team_id, away_team_id,
@@ -731,8 +732,10 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             "season": g.season,
             "data_through_date": pd.Timestamp(asof_date).date(),
             "PARK_PF_RUNS": float(park.get((g.season, g.venue_id), 1.0)),
-            "TEMP_F": np.nan,
-            "WIND_SPEED_MPH": np.nan,
+            # E6b: forecast when available; NaN otherwise (wind DIRECTION
+            # still unavailable pregame — WIND_OUT_MPH stays NaN, see E6c)
+            "TEMP_F": (weather or {}).get(g.game_pk, {}).get("temp_f", np.nan),
+            "WIND_SPEED_MPH": (weather or {}).get(g.game_pk, {}).get("wind_mph", np.nan),
             "IS_OPEN_AIR": 1 if roof.get(g.venue_id) == "Open" else 0,
             "IS_NIGHT": 1 if g.day_night == "night" else 0,
             "IS_DOUBLEHEADER_G2": 1 if (g.game_number or 1) > 1 else 0,

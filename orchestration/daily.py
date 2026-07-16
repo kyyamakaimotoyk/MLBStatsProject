@@ -165,6 +165,7 @@ def fetch_slate(target_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         rows.append({
             "game_pk": g["gamePk"],
             "game_date": g["officialDate"],
+            "first_pitch_utc": g.get("gameDate"),
             "season": int(g["season"]),
             "game_type": g.get("gameType"),
             "day_night": g.get("dayNight"),
@@ -232,9 +233,11 @@ def _game_lineups(slate: pd.DataFrame, posted: pd.DataFrame,
 
 
 def predict_team(slate: pd.DataFrame, target_date: str, asof: str,
-                 lineups: pd.DataFrame | None = None) -> pd.DataFrame:
+                 lineups: pd.DataFrame | None = None,
+                 weather: dict | None = None) -> pd.DataFrame:
     bundle = _team_bundle(target_date)
-    rows = team_features.build_prediction_rows(slate, asof, lineups=lineups)
+    rows = team_features.build_prediction_rows(slate, asof, lineups=lineups,
+                                               weather=weather)
     warnings = []
     out = []
     for name, model in (("lgbm_runs", bundle["model"]), ("elo", bundle["elo"])):
@@ -422,8 +425,20 @@ def main() -> None:
     if slate.empty:
         log.info("no games scheduled for %s", target)
         return
+    # E6b: pregame weather forecasts (best-effort; NaN on failure is the
+    # pre-E6b behavior, never blocks predictions)
+    weather = None
+    try:
+        from ingestion import weather_forecast
+        venues = pd.read_sql(text(
+            "SELECT venue_id, latitude, longitude, roof_type FROM venues"), get_engine())
+        weather = weather_forecast.fetch_forecasts(slate, venues)
+    except Exception as exc:
+        log.warning("weather forecasts failed: %s", exc)
+
     game_lineups = _game_lineups(slate, posted, _projected_lineups())
-    team_preds = predict_team(slate, target, asof, lineups=game_lineups)
+    team_preds = predict_team(slate, target, asof, lineups=game_lineups,
+                              weather=weather)
     batter_preds = predict_batters(slate, target, asof, lineups=game_lineups)
     summarize(slate, team_preds, batter_preds)
     warnings = team_preds.attrs.get("warnings", []) + batter_preds.attrs.get("warnings", [])

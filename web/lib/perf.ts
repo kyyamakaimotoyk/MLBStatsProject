@@ -48,8 +48,8 @@ export function roc(rows: ResultRow[]) {
     prevFpr = fpr;
     prevTpr = tpr;
   }
-  // thin the curve for rendering
-  const step = Math.max(1, Math.floor(points.length / 200));
+  // thin the curve for rendering (markers need breathing room)
+  const step = Math.max(1, Math.floor(points.length / 60));
   return { points: points.filter((_, i) => i % step === 0 || i === points.length - 1), auc };
 }
 

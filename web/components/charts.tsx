@@ -102,8 +102,8 @@ export function SkillCurveChart({ rows }: { rows: ResultRow[] }) {
             wrapperStyle={{ fontSize: 12 }}
           />
           <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
-          <Line type="monotone" dataKey="accuracy" stroke={S1} strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="coverage" stroke={S2} strokeWidth={2} dot={false} />
+          <Line type="linear" dataKey="accuracy" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="linear" dataKey="coverage" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
         </LineChart>
       </ResponsiveContainer>
     </ChartPanel>
@@ -149,7 +149,7 @@ export function RocChart({ rows }: { rows: ResultRow[] }) {
             strokeDasharray="4 4"
             strokeWidth={1}
           />
-          <Line type="monotone" dataKey="tpr" stroke={S1} strokeWidth={2} dot={false} />
+          <Line type="linear" dataKey="tpr" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
         </LineChart>
       </ResponsiveContainer>
     </ChartPanel>
@@ -320,7 +320,7 @@ export function PlayerCountingChart({
         )}
         <Bar dataKey="actual" fill={S2} radius={[4, 4, 0, 0]} />
         {hasExpected && (
-          <Line type="monotone" dataKey="expected" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
+          <Line type="linear" dataKey="expected" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
         )}
       </ComposedChart>
     </ResponsiveContainer>
@@ -374,9 +374,9 @@ export function ClearCurveChart({
           wrapperStyle={{ fontSize: 12 }}
         />
         <ReferenceLine x={line} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
-        <Line type="monotone" dataKey="window" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
+        <Line type="linear" dataKey="window" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
         {model && (
-          <Line type="monotone" dataKey="tonight" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="linear" dataKey="tonight" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
         )}
       </LineChart>
     </ResponsiveContainer>
@@ -426,11 +426,11 @@ export function TeamTrendsChart({
         {series.map((s, i) => (
           <Line
             key={s.team}
-            type="monotone"
+            type="linear"
             dataKey={s.team}
             stroke={TEAM_SERIES[i % TEAM_SERIES.length]}
             strokeWidth={2}
-            dot={false}
+            dot={{ r: 2 }}
             connectNulls
           />
         ))}

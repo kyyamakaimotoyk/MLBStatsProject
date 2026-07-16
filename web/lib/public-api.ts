@@ -165,7 +165,8 @@ export type TeamRow = {
 
 export const getSummary = () => getJSON<Summary>("/api/public/summary");
 export const getFeed = (days = 7) => getJSON<Feed>(`/api/public/feed?days=${days}`);
-export const getTeam = (abbrev: string) => getJSON<TeamDetail>(`/api/public/team/${abbrev}`);
+export const getTeam = (abbrev: string) =>
+  getJSON<TeamDetail>(`/api/public/team/${encodeURIComponent(abbrev)}`);
 export const getTeams = () => getJSON<TeamRow[]>("/api/public/teams");
 export const getPlayer = (id: number) => getJSON<PlayerDetail>(`/api/public/player/${id}`);
 export const searchPlayers = (q: string) =>

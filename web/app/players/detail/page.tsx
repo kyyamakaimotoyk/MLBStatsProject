@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { BattingGame, getPlayer, PitchingGame, PlayerDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
 import { poissonTail } from "@/lib/perf";
@@ -55,7 +55,15 @@ function windowGames<T extends { game_date: string; season: number }>(
 }
 
 export default function PlayerPage() {
-  const params = useParams<{ id: string }>();
+  return (
+    <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+      <PlayerContent />
+    </Suspense>
+  );
+}
+
+function PlayerContent() {
+  const id = useSearchParams().get("id");
   const [player, setPlayer] = useState<PlayerDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [batStat, setBatStat] = useState<(typeof BAT_STATS)[number]["key"]>("h");
@@ -66,9 +74,8 @@ export default function PlayerPage() {
   const [line, setLine] = useState(2);
 
   useEffect(() => {
-    if (params.id)
-      getPlayer(Number(params.id)).then(setPlayer).catch((e) => setError(String(e)));
-  }, [params.id]);
+    if (id) getPlayer(Number(id)).then(setPlayer).catch((e) => setError(String(e)));
+  }, [id]);
 
   const batDef = BAT_STATS.find((s) => s.key === batStat)!;
   const lineDef = BAT_STATS.find((s) => s.key === lineStat)!;

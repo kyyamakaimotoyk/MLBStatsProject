@@ -60,7 +60,7 @@ export default function PlayersPage() {
             {results.map((r) => (
               <li key={r.player_id}>
                 <Link
-                  href={`/players/${r.player_id}`}
+                  href={`/players/detail?id=${r.player_id}`}
                   className="block px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   onClick={() => setQ("")}
                 >
@@ -96,7 +96,7 @@ export default function PlayersPage() {
                   <tr key={`${r.game_pk}-${i}`} className="border-t border-zinc-200 dark:border-zinc-800">
                     <td className="px-3 py-2 font-medium">
                       <Link
-                        href={`/players/${r.player_id}`}
+                        href={`/players/detail?id=${r.player_id}`}
                         className="hover:text-[var(--accent-text)] hover:underline"
                       >
                         {r.batter}

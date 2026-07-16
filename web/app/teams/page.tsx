@@ -105,7 +105,7 @@ export default function TeamsPage() {
               {rows.map((t) => (
                 <li key={t.team_id}>
                   <Link
-                    href={`/teams/${t.abbrev}`}
+                    href={`/teams/team?ab=${t.abbrev}`}
                     className="text-sm hover:text-[var(--accent-text)]"
                   >
                     <span className="font-mono text-zinc-400">{t.abbrev}</span>{" "}

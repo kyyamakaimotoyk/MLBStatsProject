@@ -1,20 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { getTeam, TeamDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
 import { ResultMark } from "@/components/shared";
 
 export default function TeamPage() {
-  const params = useParams<{ abbrev: string }>();
+  return (
+    <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+      <TeamContent />
+    </Suspense>
+  );
+}
+
+function TeamContent() {
+  const abbrev = useSearchParams().get("ab");
   const [team, setTeam] = useState<TeamDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (params.abbrev)
-      getTeam(params.abbrev).then(setTeam).catch((e) => setError(String(e)));
-  }, [params.abbrev]);
+    if (abbrev) getTeam(abbrev).then(setTeam).catch((e) => setError(String(e)));
+  }, [abbrev]);
 
   if (error) return <p className="text-sm text-zinc-500">No recent games found.</p>;
   if (!team) return <p className="text-sm text-zinc-500">Loading…</p>;

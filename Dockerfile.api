@@ -1,0 +1,13 @@
+FROM python:3.14-slim
+
+WORKDIR /app
+COPY api/requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# Deliberately model-free (the NBA api lesson): only core/db + the routers.
+COPY core/__init__.py core/__init__.py
+COPY core/db.py core/db.py
+COPY api api
+
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -31,13 +31,14 @@ export default function HomePage() {
         <div className="flex justify-center gap-3">
           <a
             href="#tonight"
-            className="rounded bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+            className="rounded px-4 py-2 text-sm font-semibold hover:opacity-90"
+            style={{ backgroundColor: "var(--btn-bg)", color: "var(--btn-text)" }}
           >
             {copy.site.ctaTonight}
           </a>
           <Link
             href="/record"
-            className="rounded border border-zinc-300 px-4 py-2 text-sm font-semibold hover:border-orange-500 dark:border-zinc-700"
+            className="rounded border border-zinc-300 px-4 py-2 text-sm font-semibold hover:border-[var(--accent-mark)] dark:border-zinc-700"
           >
             {copy.site.ctaRecord}
           </Link>
@@ -104,7 +105,7 @@ export default function HomePage() {
         {past.length > showDays && (
           <button
             onClick={() => setShowDays((n) => n + 4)}
-            className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:border-orange-500 dark:border-zinc-700"
+            className="rounded border border-zinc-300 px-3 py-1.5 text-sm hover:border-[var(--accent-mark)] dark:border-zinc-700"
           >
             Show more days
           </button>
@@ -114,7 +115,9 @@ export default function HomePage() {
       <section className="grid gap-4 border-t border-zinc-200 pt-8 sm:grid-cols-4 dark:border-zinc-800">
         {copy.steps.map((s, i) => (
           <div key={s.title} className="space-y-1">
-            <div className="text-xs font-bold text-orange-500">STEP {i + 1}</div>
+            <div className="text-xs font-bold" style={{ color: "var(--accent-text)" }}>
+              STEP {i + 1}
+            </div>
             <div className="font-semibold">{s.title}</div>
             <p className="text-sm text-zinc-500">{s.body}</p>
           </div>

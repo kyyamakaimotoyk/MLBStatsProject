@@ -30,7 +30,7 @@ export default function TeamsPage() {
                 <li key={t.team_id}>
                   <Link
                     href={`/teams/${t.abbrev}`}
-                    className="text-sm hover:text-orange-500"
+                    className="text-sm hover:text-[var(--accent-text)]"
                   >
                     <span className="font-mono text-zinc-400">{t.abbrev}</span>{" "}
                     {t.name}

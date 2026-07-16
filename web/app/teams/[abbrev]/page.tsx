@@ -63,10 +63,13 @@ export default function TeamPage() {
                     {g.is_final ? `${g.away_score}–${g.home_score}` : "—"}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    {g.team_won == null ? "—" : g.team_won ? (
-                      <span className="font-semibold text-emerald-600 dark:text-emerald-400">W</span>
-                    ) : (
-                      <span className="font-semibold text-rose-600 dark:text-rose-400">L</span>
+                    {g.team_won == null ? "—" : (
+                      <span
+                        className="font-semibold"
+                        style={{ color: g.team_won ? "var(--good-text)" : "var(--bad-text)" }}
+                      >
+                        {g.team_won ? "W" : "L"}
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-300">

@@ -14,7 +14,9 @@ export function ProofChip({
 }) {
   return (
     <div className="rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="text-2xl font-bold text-orange-500">{metric}</div>
+      <div className="text-2xl font-bold" style={{ color: "var(--accent-mark)" }}>
+        {metric}
+      </div>
       <div className="text-xs text-zinc-500">{line1}</div>
       {line2 && <div className="text-xs text-zinc-500">{line2}</div>}
     </div>
@@ -23,10 +25,13 @@ export function ProofChip({
 
 export function ResultMark({ correct }: { correct: boolean | null }) {
   if (correct == null) return <span className="text-zinc-400">—</span>;
-  return correct ? (
-    <span className="font-bold text-emerald-600 dark:text-emerald-400">✓</span>
-  ) : (
-    <span className="font-bold text-rose-600 dark:text-rose-400">✗</span>
+  return (
+    <span
+      className="font-bold"
+      style={{ color: correct ? "var(--good-text)" : "var(--bad-text)" }}
+    >
+      {correct ? "✓" : "✗"}
+    </span>
   );
 }
 
@@ -49,19 +54,24 @@ export function PicksTable({ games }: { games: FeedGame[] }) {
           {games.map((g) => (
             <tr
               key={g.game_pk}
-              className={`border-t border-zinc-200 dark:border-zinc-800 ${
+              className="border-t border-zinc-200 dark:border-zinc-800"
+              style={
                 g.correct == null
-                  ? ""
-                  : g.correct
-                    ? "bg-emerald-50 dark:bg-emerald-950/30"
-                    : "bg-rose-50 dark:bg-rose-950/30"
-              }`}
+                  ? undefined
+                  : {
+                      backgroundColor: `color-mix(in oklab, ${
+                        g.correct ? "var(--good-bg)" : "var(--bad-bg)"
+                      } 70%, transparent)`,
+                    }
+              }
             >
               <td className="px-3 py-2 font-medium">
                 {g.away} @ {g.home}
               </td>
               <td className="px-3 py-2">
-                <span className="font-semibold text-orange-500">{g.pick}</span>
+                <span className="font-semibold" style={{ color: "var(--accent-text)" }}>
+                  {g.pick}
+                </span>
                 {g.pick_chance <= 0.55 && (
                   <span className="ml-2 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                     {copy.table.coinFlip}
@@ -99,9 +109,11 @@ export function PicksStrip({ games }: { games: FeedGame[] }) {
         <span
           key={g.game_pk}
           title={`${g.away} @ ${g.home}: picked ${g.pick} (${pctLabel(g.pick_chance)})`}
-          className={`inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold text-white ${
-            g.correct ? "bg-emerald-500" : "bg-rose-500"
-          }`}
+          className="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold"
+          style={{
+            backgroundColor: g.correct ? "var(--good-bg)" : "var(--bad-bg)",
+            color: g.correct ? "var(--good-text)" : "var(--bad-text)",
+          }}
         >
           {g.correct ? "✓" : "✗"}
         </span>

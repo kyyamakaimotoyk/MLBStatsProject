@@ -23,10 +23,11 @@ const TEXT = "var(--viz-text)";
 const REF = "var(--viz-ref)";
 
 const tooltipStyle = {
-  backgroundColor: "var(--background, #fff)",
+  backgroundColor: "var(--viz-panel)",
   border: `1px solid ${GRID}`,
   borderRadius: 6,
   fontSize: 12,
+  color: "var(--foreground)",
 };
 
 function ChartPanel({
@@ -162,14 +163,14 @@ export function ConfusionMatrix({ rows }: { rows: ResultRow[] }) {
   const total = rows.length;
   const cell = (n: number, good: boolean) => (
     <td
-      className={`px-4 py-3 text-center ${
-        good
-          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-          : "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
-      }`}
+      className="px-4 py-3 text-center"
+      style={{
+        backgroundColor: good ? "var(--good-bg)" : "var(--bad-bg)",
+        color: good ? "var(--good-text)" : "var(--bad-text)",
+      }}
     >
       <div className="text-lg font-bold">{((100 * n) / total).toFixed(1)}%</div>
-      <div className="text-xs opacity-70">{n.toLocaleString()} games</div>
+      <div className="text-xs opacity-80">{n.toLocaleString()} games</div>
     </td>
   );
   return (

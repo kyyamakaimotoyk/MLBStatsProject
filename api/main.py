@@ -9,12 +9,21 @@ Runs locally for now:
 
 import os
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from core.db import get_engine
+
+
+def _no_vig(ml_home: pd.Series, ml_away: pd.Series) -> pd.Series:
+    def implied(a):
+        a = a.astype(float)
+        return np.where(a < 0, -a / (-a + 100.0), 100.0 / (a + 100.0))
+    ph, pa = implied(ml_home), implied(ml_away)
+    return ph / (ph + pa)
 
 app = FastAPI(title="MLB Stats API", version="0.1")
 app.add_middleware(
@@ -42,23 +51,36 @@ def health():
 
 @app.get("/api/predictions")
 def predictions(date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$")):
-    """Team-level predictions (all models) for a date, labeled with matchups."""
-    rows = _df("""
+    """Team-level predictions (all models) for a date, labeled with matchups
+    and the latest captured market line (closing preferred)."""
+    df = pd.read_sql(text("""
         SELECT g.game_pk, g.game_date::text AS game_date, g.status,
                ht.abbrev AS home, at.abbrev AS away,
                g.home_score, g.away_score, g.is_final,
                p.model_type, p.model_version, p.p_home, p.pred_margin, p.pred_total,
-               p.data_through_date::text AS data_through_date
+               p.data_through_date::text AS data_through_date,
+               o.ml_home, o.ml_away, o.total AS market_total,
+               o.book AS market_book, o.is_closing AS market_is_closing
         FROM model_predictions p
         JOIN games g USING (game_pk)
         JOIN teams ht ON ht.team_id = g.home_team_id
         JOIN teams at ON at.team_id = g.away_team_id
+        LEFT JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = p.game_pk AND o.ml_home IS NOT NULL
+            ORDER BY o.is_closing DESC, o.captured_at DESC LIMIT 1
+        ) o ON TRUE
         WHERE g.game_date = :date
         ORDER BY g.game_pk, p.model_type
-    """, date=date)
-    if not rows:
+    """), get_engine(), params={"date": date})
+    if df.empty:
         raise HTTPException(404, f"no predictions for {date}")
-    return rows
+    has_ml = df["ml_home"].notna() & df["ml_away"].notna()
+    df["market_p_home"] = np.nan
+    if has_ml.any():
+        df.loc[has_ml, "market_p_home"] = _no_vig(df.loc[has_ml, "ml_home"],
+                                                  df.loc[has_ml, "ml_away"])
+    return df.astype(object).where(df.notna(), None).to_dict("records")
 
 
 @app.get("/api/batters")
@@ -109,7 +131,34 @@ def performance(days: int = Query(30, le=365)):
         WHERE g.is_final AND g.game_date >= current_date - :days
         GROUP BY 1
     """, days=days)
-    return {"days": days, "team": team, "batter": batter}
+
+    market_df = pd.read_sql(text("""
+        SELECT p.model_type, p.model_version, p.pred_margin,
+               o.ml_home, o.ml_away,
+               g.home_score > g.away_score AS home_won
+        FROM model_predictions p
+        JOIN games g USING (game_pk)
+        JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = p.game_pk AND o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) o ON TRUE
+        WHERE g.is_final AND g.game_date >= current_date - :days
+    """), get_engine(), params={"days": days})
+    market = []
+    if not market_df.empty:
+        market_df["market_p"] = _no_vig(market_df["ml_home"], market_df["ml_away"])
+        market_df = market_df[market_df["market_p"].between(0.20, 0.85)]
+        for (mtype, mver), grp in market_df.groupby(["model_type", "model_version"]):
+            market.append({
+                "model_type": mtype, "model_version": mver, "n": int(len(grp)),
+                "model_acc": float(((grp["pred_margin"] > 0) == grp["home_won"]).mean()),
+                "market_acc": float(((grp["market_p"] > 0.5) == grp["home_won"]).mean()),
+                "pick_agreement": float(((grp["pred_margin"] > 0)
+                                         == (grp["market_p"] > 0.5)).mean()),
+            })
+    return {"days": days, "team": team, "batter": batter, "market": market}
 
 
 @app.get("/api/results")

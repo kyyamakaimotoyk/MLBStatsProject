@@ -18,3 +18,8 @@ export function fmtNum(x: number | null | undefined, digits = 2): string {
 export function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
+export function fmtOdds(ml: number | null | undefined): string {
+  if (ml == null) return "—";
+  return ml > 0 ? `+${ml}` : `${ml}`;
+}

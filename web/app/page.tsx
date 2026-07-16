@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getJSON, fmtNum, fmtPct } from "@/lib/api";
+import { getJSON, fmtNum, fmtOdds, fmtPct } from "@/lib/api";
 
 type Prediction = {
   game_pk: number;
@@ -16,7 +16,29 @@ type Prediction = {
   p_home: number | null;
   pred_margin: number | null;
   pred_total: number | null;
+  ml_home: number | null;
+  ml_away: number | null;
+  market_total: number | null;
+  market_p_home: number | null;
+  market_is_closing: boolean | null;
 };
+
+function Edge({ model, market }: { model: number | null; market: number | null }) {
+  if (model == null || market == null) return <span className="text-zinc-400">—</span>;
+  const edge = model - market;
+  const cls =
+    Math.abs(edge) < 0.03
+      ? "text-zinc-500"
+      : edge > 0
+        ? "text-emerald-600 dark:text-emerald-400"
+        : "text-rose-600 dark:text-rose-400";
+  return (
+    <span className={cls}>
+      {edge > 0 ? "+" : ""}
+      {(edge * 100).toFixed(1)}pp
+    </span>
+  );
+}
 
 function tomorrowOrToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -65,11 +87,14 @@ export default function PicksPage() {
                 <th className="px-3 py-2 text-right">P(home)</th>
                 <th className="px-3 py-2 text-right">Margin</th>
                 <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Market ML</th>
+                <th className="px-3 py-2 text-right">Mkt P(home)</th>
+                <th className="px-3 py-2 text-right">Edge</th>
                 <th className="px-3 py-2 text-right">Result</th>
               </tr>
             </thead>
             <tbody>
-              {[...games.values()].flat().map((r, i) => (
+              {[...games.values()].flat().map((r) => (
                 <tr
                   key={`${r.game_pk}-${r.model_type}`}
                   className="border-t border-zinc-200 dark:border-zinc-800"
@@ -84,6 +109,15 @@ export default function PicksPage() {
                     {fmtNum(r.pred_margin)}
                   </td>
                   <td className="px-3 py-2 text-right">{fmtNum(r.pred_total)}</td>
+                  <td className="px-3 py-2 text-right text-zinc-500">
+                    {r.ml_home != null
+                      ? `${fmtOdds(r.ml_home)} / ${fmtOdds(r.ml_away)}${r.market_is_closing ? "" : " (am)"}`
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right">{fmtPct(r.market_p_home)}</td>
+                  <td className="px-3 py-2 text-right">
+                    <Edge model={r.p_home} market={r.market_p_home} />
+                  </td>
                   <td className="px-3 py-2 text-right text-zinc-500">
                     {r.is_final ? `${r.away_score}–${r.home_score}` : r.status ?? "—"}
                   </td>

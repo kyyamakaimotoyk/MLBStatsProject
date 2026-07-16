@@ -18,7 +18,20 @@ type BatterPerf = {
   brier_p_hr: number;
   mae_h: number;
 };
-type Performance = { days: number; team: TeamPerf[]; batter: BatterPerf[] };
+type MarketPerf = {
+  model_type: string;
+  model_version: string;
+  n: number;
+  model_acc: number;
+  market_acc: number;
+  pick_agreement: number;
+};
+type Performance = {
+  days: number;
+  team: TeamPerf[];
+  batter: BatterPerf[];
+  market: MarketPerf[];
+};
 
 export default function PerformancePage() {
   const [days, setDays] = useState(30);
@@ -28,7 +41,7 @@ export default function PerformancePage() {
     setData(null);
     getJSON<Performance>(`/api/performance?days=${days}`)
       .then(setData)
-      .catch(() => setData({ days, team: [], batter: [] }));
+      .catch(() => setData({ days, team: [], batter: [], market: [] }));
   }, [days]);
 
   return (
@@ -80,6 +93,44 @@ export default function PerformancePage() {
                       <td className="px-3 py-2 text-right">{fmtPct(r.win_acc)}</td>
                       <td className="px-3 py-2 text-right">{fmtNum(r.margin_mae, 3)}</td>
                       <td className="px-3 py-2 text-right">{fmtNum(r.total_mae, 3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400">
+              Vs closing line
+            </h2>
+            {(data.market ?? []).length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                No graded games with captured closing lines yet.
+              </p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
+                  <tr>
+                    <th className="px-3 py-2">Model</th>
+                    <th className="px-3 py-2">Version</th>
+                    <th className="px-3 py-2 text-right">N</th>
+                    <th className="px-3 py-2 text-right">Model acc</th>
+                    <th className="px-3 py-2 text-right">Market acc</th>
+                    <th className="px-3 py-2 text-right">Pick agreement</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.market.map((r) => (
+                    <tr
+                      key={`${r.model_type}-${r.model_version}`}
+                      className="border-t border-zinc-200 dark:border-zinc-800"
+                    >
+                      <td className="px-3 py-2 font-medium">{r.model_type}</td>
+                      <td className="px-3 py-2 text-zinc-500">{r.model_version}</td>
+                      <td className="px-3 py-2 text-right">{r.n}</td>
+                      <td className="px-3 py-2 text-right">{fmtPct(r.model_acc)}</td>
+                      <td className="px-3 py-2 text-right">{fmtPct(r.market_acc)}</td>
+                      <td className="px-3 py-2 text-right">{fmtPct(r.pick_agreement)}</td>
                     </tr>
                   ))}
                 </tbody>

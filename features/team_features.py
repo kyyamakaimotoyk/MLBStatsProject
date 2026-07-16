@@ -40,7 +40,7 @@ def _load_games(max_date):
         SELECT g.game_pk, g.season, g.game_date, g.first_pitch_utc, g.game_type,
                g.home_team_id, g.away_team_id, g.venue_id, g.day_night,
                g.game_number, g.temp_f, g.wind_speed_mph, g.wind_dir,
-               g.hp_umpire_id, g.home_score, g.away_score
+               g.hp_umpire_id, g.scheduled_innings, g.home_score, g.away_score
         FROM games g
         WHERE g.is_final AND g.home_score IS NOT NULL
     """
@@ -525,6 +525,11 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
 
     rows = []
     for g in games.itertuples():
+        # 2020-21 seven-inning doubleheaders: deflated totals must not become
+        # training targets. They still contribute to rolling-form inputs
+        # above (a small, unavoidable bias confined to those seasons).
+        if g.scheduled_innings == 7:
+            continue
         wd = g.wind_dir if isinstance(g.wind_dir, str) else ""
         row = {
             "game_pk": g.game_pk,

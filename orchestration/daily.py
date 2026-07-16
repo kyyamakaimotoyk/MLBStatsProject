@@ -125,6 +125,7 @@ def _batter_bundle(target_date: str) -> dict:
         JOIN games g USING (game_pk)
         JOIN batter_game_lines b USING (game_pk, player_id)
         WHERE g.is_final AND l.batting_order BETWEEN 1 AND 9 AND b.pa IS NOT NULL
+          AND COALESCE(g.scheduled_innings, 9) = 9
     """), engine).astype({"pa": int})
     bundle = {"model": model, "feats": feats, "w": float(w),
               "league_row": league_row,

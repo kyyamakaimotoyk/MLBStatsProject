@@ -120,6 +120,42 @@ information source the market-adjacent Elo baseline cannot see.
 
 ---
 
+## E7 — 2026-07-16 — 2019-2021 backfill: SHIPPED, the project's largest gain
+
+**Change.** Three seasons backfilled (5,883 games, ~2.1M pitches; 2020 is the
+60-game COVID season). Consequences bundled in: real 2022 park factors
+(previously neutral), two extra seasons of Elo burn-in, 7-inning 2020-21
+doubleheaders excluded from training targets (kept in rolling inputs), odds
+archive extended to 2021 (11,312 games with closing lines), era-constant
+prior unchanged. Snapshot v20260716_083741 (16,985 rows), leakage PASS on
+11,854 games.
+
+**Team model (same 8,713 test games, seeds 0/1/2 all confirm).**
+vs the previous shipped config: acc .5612 vs .5522 (p=.034), margin MAE
+3.4778 vs 3.4946 (p=.003), total MAE 3.5331 vs 3.5556 (**p=.0001 — first
+significant totals gain ever**), AUC .5810 vs .5734 (p=.031). Seeds 1/2:
+all four metrics p<=.026, most p<.001. 12/12 comparisons positive.
+
+vs rebuilt Elo (also improved with burn-in, .5563/.5789/3.480): the model
+leads every point estimate; totals decisively (p<.0001); win-pick metrics at
+parity (acc p=.31, AUC p=.62). Honest claim: better-or-equal everywhere,
+strictly better on totals. Market gap: totals 3.533 vs market 3.47 — halved.
+
+**Batter model.** The 2023 anomaly resolved: with 2019-2022 training, 2023
+now beats the marginal baseline (1.4836 vs 1.4918; it lost with 2022-only).
+Every season, every game-level stat except raw K (B2 blend covers it).
+B0's learning curve confirmed end to end.
+
+**Also observed.** B3 isotonic on p_hit turned SIGNIFICANT with 8-season
+training (Brier .23349 vs .23376, p<.0001 pooled) — queued for its own
+confirmation before shipping. B1 still negative, B2 still strong.
+
+**Decision.** Ships everywhere: snapshot current, production bundles
+invalidated (next daily run trains on 8 seasons), public-site backtest
+rewritten from the 8-season model.
+
+---
+
 ## E5 — 2026-07-15 — lineup-strength features: PARKED (positive, not significant)
 
 **Hypothesis.** The posted starting nine, aggregated from shrunken per-batter

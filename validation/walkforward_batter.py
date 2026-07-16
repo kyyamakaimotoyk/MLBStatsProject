@@ -46,7 +46,8 @@ def _load_game_side_data():
         SELECT l.game_pk, l.player_id, l.team_id, l.batting_order AS lineup_slot,
                g.season, g.game_date, g.game_type, g.venue_id,
                (l.team_id = g.home_team_id) AS is_home
-        FROM lineups l JOIN games g USING (game_pk) WHERE g.is_final
+        FROM lineups l JOIN games g USING (game_pk)
+        WHERE g.is_final AND COALESCE(g.scheduled_innings, 9) = 9
     """), engine)
     starters = pd.read_sql(text("""
         SELECT game_pk, team_id, player_id AS sp_id

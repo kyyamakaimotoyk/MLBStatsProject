@@ -214,6 +214,29 @@ def player(player_id: int, days: int = Query(45, le=120)):
     }
 
 
+@router.get("/api/public/results")
+def results(days: int = Query(1400, le=2000)):
+    """Flat graded rows for client-side chart derivation (hoopmodel pattern:
+    the browser computes skill/ROC/confusion/error metrics from raw rows)."""
+    df = pd.read_sql(text("""
+        SELECT g.game_date::text AS game_date, p.p_home, p.pred_margin,
+               p.pred_total,
+               g.home_score - g.away_score AS margin,
+               g.home_score + g.away_score AS total,
+               (g.home_score > g.away_score) AS home_won
+        FROM games g
+        JOIN LATERAL (
+            SELECT * FROM model_predictions p
+            WHERE p.game_pk = g.game_pk AND p.model_type = :m
+            ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
+            LIMIT 1
+        ) p ON TRUE
+        WHERE g.is_final AND g.game_date >= current_date - :days
+        ORDER BY g.game_date
+    """), get_engine(), params={"m": PRIMARY, "days": days})
+    return _clean(df)
+
+
 @router.get("/api/public/teams")
 def teams_list():
     return _clean(pd.read_sql(text("""

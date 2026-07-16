@@ -2,16 +2,26 @@
 
 import { useEffect, useState } from "react";
 import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
+import { getJSON } from "@/lib/api";
+import { ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { PicksStrip, ProofChip } from "@/components/shared";
+import {
+  ConfusionMatrix,
+  MarginMissChart,
+  RocChart,
+  SkillCurveChart,
+} from "@/components/charts";
 
 export default function RecordPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [feed, setFeed] = useState<Feed | null>(null);
+  const [rows, setRows] = useState<ResultRow[] | null>(null);
 
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
     getFeed(21).then(setFeed).catch(() => {});
+    getJSON<ResultRow[]>("/api/public/results").then(setRows).catch(() => {});
   }, []);
 
   const gradedGames = (feed?.days ?? [])
@@ -67,6 +77,18 @@ export default function RecordPage() {
           </p>
         )}
       </section>
+
+      {rows && rows.length > 100 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Under the hood</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <SkillCurveChart rows={rows} />
+            <RocChart rows={rows} />
+            <MarginMissChart rows={rows} />
+            <ConfusionMatrix rows={rows} />
+          </div>
+        </section>
+      )}
 
       <p className="text-xs text-zinc-400">
         The record includes the model's full backtest: for every past game the

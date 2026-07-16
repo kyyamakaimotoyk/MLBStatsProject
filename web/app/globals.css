@@ -24,3 +24,21 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Chart series colors — validated (dataviz six checks) for both surfaces. */
+:root {
+  --series-1: #eb6834;
+  --series-2: #2a78d6;
+  --viz-grid: #e4e4e7;
+  --viz-text: #71717a;
+  --viz-ref: #a1a1aa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --series-1: #d95926;
+    --series-2: #3987e5;
+    --viz-grid: #27272a;
+    --viz-text: #a1a1aa;
+    --viz-ref: #52525b;
+  }
+}

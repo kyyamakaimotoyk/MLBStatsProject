@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { getPlayer, PlayerDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
 import { ResultMark } from "@/components/shared";
+import { PlayerHitsChart } from "@/components/charts";
 
 export default function PlayerPage() {
   const params = useParams<{ id: string }>();
@@ -35,6 +36,8 @@ export default function PlayerPage() {
           <span className="font-semibold">{player.l15_hr}</span> home runs
         </p>
       </div>
+
+      <PlayerHitsChart games={player.games} />
 
       <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
         <table className="w-full text-sm">

@@ -330,3 +330,22 @@ B_ARSENAL_MATCH): PARKED.** Per-PA log loss 1.47543 vs 1.47562 (p=.22),
 hits MAE p=.22, K MAE p=.97. Direction mildly positive; columns stay in the
 builder behind flag arsenal_cross (off).
 
+
+## B5 — 2026-07-17 — 2026 batter walk-forward window: backfill shipped
+
+**What.** Ran the standard batter walk-forward for a 2026 test window
+(train 2019-2025, 1,188,606 PAs; test 109,249 PAs through 2026-07-16) via
+the new `--seasons` flag, writing 25,887 game predictions as pa_v3 — the
+site's player pages had no pregame batter calls for 2026 games before
+launch (blank "We said" columns).
+
+**Result (out of sample, consistent with the 2023-25 windows).** Per-PA
+log loss 1.47009 vs batter-marginal 1.48074 / league 1.49304. Game-level:
+hits MAE 0.6803 vs 0.6826 base; Brier p_hit 0.2357 vs 0.2366; Brier p_hr
+0.1014 vs 0.1017. B2 K-blend confirmed again on 2026 alone (K MAE 0.6717
+vs 0.6749, p<.0001).
+
+**No model or feature change** — same builder, same feature set, same
+hyperparams; registry row logged as usual. Also backfilled 2026 closing
+lines from ESPN the same day (1,444/1,444 final games covered), so the
+vs-market record now includes the current season.

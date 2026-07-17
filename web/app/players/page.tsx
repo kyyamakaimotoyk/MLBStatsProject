@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getJSON, today } from "@/lib/api";
-import { searchPlayers } from "@/lib/public-api";
+import { getPitcherBoard, PitcherBoardRow, searchPlayers } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
 
 type BatterRow = {
@@ -23,11 +23,19 @@ export default function PlayersPage() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ player_id: number; full_name: string }[]>([]);
   const [board, setBoard] = useState<BatterRow[] | null>(null);
+  const [pitchers, setPitchers] = useState<PitcherBoardRow[] | null>(null);
 
   useEffect(() => {
     getJSON<BatterRow[]>(`/api/batters?date=${today()}`)
       .then(setBoard)
       .catch(() => setBoard([]));
+    getPitcherBoard()
+      .then((rows) =>
+        setPitchers(
+          [...rows].sort((a, b) => (b.opp_exp_k ?? -1) - (a.opp_exp_k ?? -1)),
+        ),
+      )
+      .catch(() => setPitchers([]));
   }, []);
 
   useEffect(() => {
@@ -44,7 +52,7 @@ export default function PlayersPage() {
       <div>
         <h1 className="text-2xl font-bold">Players</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Look up any hitter's recent games and how our calls on them have done.
+          Look up any player's recent games and how our calls on them have done.
         </p>
       </div>
 
@@ -117,6 +125,84 @@ export default function PlayersPage() {
             </table>
           </div>
         )}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">Tonight's pitching matchups</h2>
+        <p className="text-sm text-zinc-500">
+          Every probable starter, with what our hitter model expects the lineup
+          facing them to do over the whole game — our per-hitter calls, added
+          up. Most strikeouts expected first.
+        </p>
+        {!pitchers && <p className="text-sm text-zinc-500">Loading…</p>}
+        {pitchers && pitchers.length === 0 && (
+          <p className="text-sm text-zinc-500">No probable starters posted yet today.</p>
+        )}
+        {pitchers && pitchers.length > 0 && (
+          <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+            <table className="w-full text-sm">
+              <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
+                <tr>
+                  <th className="px-3 py-2">Pitcher</th>
+                  <th className="px-3 py-2">Game</th>
+                  <th className="px-3 py-2 text-right">ERA</th>
+                  <th className="px-3 py-2 text-right">WHIP</th>
+                  <th className="px-3 py-2 text-right">K/9</th>
+                  <th className="px-3 py-2 text-right">Ks expected</th>
+                  <th className="px-3 py-2 text-right">Hits allowed expected</th>
+                  <th className="px-3 py-2 text-right">HR allowed expected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pitchers.map((r) => (
+                  <tr
+                    key={`${r.game_pk}-${r.pitcher_id}`}
+                    className="border-t border-zinc-200 dark:border-zinc-800"
+                  >
+                    <td className="px-3 py-2 font-medium">
+                      <Link
+                        href={`/players/detail?id=${r.pitcher_id}`}
+                        className="hover:text-[var(--accent-text)] hover:underline"
+                      >
+                        {r.pitcher}
+                      </Link>
+                      <span className="ml-2 text-xs text-zinc-500">
+                        {r.team}
+                        {r.throws ? ` · ${r.throws}HP` : ""}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-zinc-500">
+                      {r.away} @ {r.home}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.era != null ? r.era.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.whip != null ? r.whip.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.k9 != null ? r.k9.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right font-medium">
+                      {r.opp_exp_k != null ? r.opp_exp_k.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.opp_exp_h != null ? r.opp_exp_h.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.opp_exp_hr != null ? r.opp_exp_hr.toFixed(1) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-xs text-zinc-400">
+          Season numbers are through last night. "Expected" columns come from
+          our hitter model and cover the opposing lineup's full game, including
+          after the starter leaves.
+        </p>
       </section>
     </div>
   );

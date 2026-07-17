@@ -101,7 +101,7 @@ B4_COLS = ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH")
 
 
 def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
-        b4_compare: bool = False) -> None:
+        b4_compare: bool = False, seasons: tuple[int, ...] = TEST_SEASONS) -> None:
     comp = bf.build()
     pa = comp["pa"]
     feats = select_features(list(pa.columns), "batter_pa")
@@ -131,7 +131,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
     calib_hist = {"p_hit": [], "p_hr": [], "hit1": [], "hr1": []}
     feats_nob4 = [c for c in feats if c not in B4_COLS]
 
-    for season in TEST_SEASONS:
+    for season in seasons:
         train = pa[pa["season"] < season]
         test = pa[pa["season"] == season]
         log.info("season %d: train %d PAs, test %d PAs", season, len(train), len(test))
@@ -310,7 +310,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
     # ---- pooled paired verdicts (B1/B2/B3), all seasons together
     P = {k: np.concatenate(v) for k, v in pooled.items() if v}
     print("\n=== B1/B2/B3 pooled paired verdicts "
-          f"({len(P['base_h'])} batter-games, 2023-2025) ===")
+          f"({len(P['base_h'])} batter-games, {min(seasons)}-{max(seasons)}) ===")
     for label, a_key, b_key in (("B1 per-SP w, hits MAE", "b1_h", "base_h"),
                                 ("B1 per-SP w, K MAE", "b1_k", "base_k"),
                                 ("B2 K-blend, K MAE", "b2_k", "base_k")):
@@ -343,9 +343,12 @@ def main() -> None:
     ap.add_argument("--version", default=MODEL_VERSION, help="model_version for stored preds")
     ap.add_argument("--b4-compare", action="store_true",
                     help="also train a no-arsenal model per season for paired B4 tests")
+    ap.add_argument("--seasons", type=int, nargs="+", default=list(TEST_SEASONS),
+                    help="test seasons, each trained on all seasons before it "
+                         "(e.g. --seasons 2026 backfills the current season)")
     args = ap.parse_args()
     run(seed=args.seed, write_preds=not args.no_preds, version=args.version,
-        b4_compare=args.b4_compare)
+        b4_compare=args.b4_compare, seasons=tuple(args.seasons))
 
 
 if __name__ == "__main__":

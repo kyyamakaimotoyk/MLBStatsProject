@@ -412,6 +412,81 @@ def results(days: int = Query(1400, le=2000)):
     return _clean(df)
 
 
+@router.get("/api/public/pitchers")
+def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    """Probable starters for a date (default today) with season-to-date form
+    and what our hitter model expects the opposing lineup to do in that game
+    (per-hitter calls summed — the whole game, not just the starter's
+    innings). Freshest probables win: the daily capture beats the backfill."""
+    engine = get_engine()
+    board = pd.read_sql(text("""
+        WITH probs AS (
+            SELECT DISTINCT ON (p.game_pk)
+                   p.game_pk, p.home_pitcher_id, p.away_pitcher_id
+            FROM probable_pitchers p
+            JOIN games g USING (game_pk)
+            WHERE g.game_date = COALESCE(CAST(:date AS date), current_date)
+            ORDER BY p.game_pk, (p.source = 'daily') DESC, p.captured_at DESC
+        )
+        SELECT g.game_pk, g.game_date::text AS game_date, g.season,
+               ht.abbrev AS home, at.abbrev AS away,
+               x.pitcher_id, x.team, pl.full_name AS pitcher, pl.throws
+        FROM probs p
+        JOIN games g USING (game_pk)
+        JOIN teams ht ON ht.team_id = g.home_team_id
+        JOIN teams at ON at.team_id = g.away_team_id
+        CROSS JOIN LATERAL (
+            VALUES (p.home_pitcher_id, ht.abbrev), (p.away_pitcher_id, at.abbrev)
+        ) AS x(pitcher_id, team)
+        JOIN players pl ON pl.player_id = x.pitcher_id
+        ORDER BY g.game_pk, x.team
+    """), engine, params={"date": date})
+    if board.empty:
+        raise HTTPException(404, "no probable starters posted for that date")
+
+    season = int(board["season"].iloc[0])
+    stats = pd.read_sql(text("""
+        SELECT pg.player_id AS pitcher_id,
+               count(*) FILTER (WHERE pg.is_starter) AS starts,
+               sum(pg.outs) AS outs, sum(pg.er) AS er, sum(pg.so) AS k,
+               sum(pg.bb) AS bb, sum(pg.h) AS h
+        FROM pitcher_game_lines pg
+        JOIN games g USING (game_pk)
+        WHERE g.is_final AND g.season = :season
+          AND g.game_date < COALESCE(CAST(:date AS date), current_date)
+          AND pg.player_id = ANY(:ids)
+        GROUP BY 1
+    """), engine, params={"season": season, "date": date,
+                          "ids": [int(i) for i in board["pitcher_id"]]})
+    ip = stats["outs"].fillna(0) / 3.0
+    stats["ip"] = ip
+    stats["era"] = np.where(ip > 0, stats["er"].fillna(0) / ip * 9, np.nan)
+    stats["whip"] = np.where(ip > 0, (stats["bb"].fillna(0) + stats["h"].fillna(0)) / ip,
+                             np.nan)
+    stats["k9"] = np.where(ip > 0, stats["k"].fillna(0) / ip * 9, np.nan)
+    stats = stats[["pitcher_id", "starts", "ip", "era", "whip", "k9"]]
+
+    vs = pd.read_sql(text("""
+        SELECT d.sp_id AS pitcher_id, d.game_pk, count(*) AS batters_predicted,
+               sum(d.exp_h) AS opp_exp_h, sum(d.exp_k) AS opp_exp_k,
+               sum(d.exp_hr) AS opp_exp_hr
+        FROM (
+            SELECT DISTINCT ON (bp.game_pk, bp.player_id) bp.*
+            FROM batter_predictions bp
+            WHERE bp.game_pk = ANY(:pks)
+            ORDER BY bp.game_pk, bp.player_id,
+                     (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+        ) d
+        WHERE d.sp_id IS NOT NULL AND d.lineup_slot BETWEEN 1 AND 9
+        GROUP BY 1, 2
+    """), engine, params={"pks": [int(i) for i in board["game_pk"].unique()]})
+
+    out = (board.drop(columns=["season"])
+           .merge(stats, on="pitcher_id", how="left")
+           .merge(vs, on=["game_pk", "pitcher_id"], how="left"))
+    return _clean(out)
+
+
 @router.get("/api/public/teams")
 def teams_list():
     return _clean(pd.read_sql(text("""

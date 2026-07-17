@@ -163,6 +163,28 @@ export type TeamRow = {
   division: string;
 };
 
+export type PitcherBoardRow = {
+  game_pk: number;
+  game_date: string;
+  home: string;
+  away: string;
+  pitcher_id: number;
+  team: string;
+  pitcher: string;
+  throws: string | null;
+  starts: number | null;
+  ip: number | null;
+  era: number | null;
+  whip: number | null;
+  k9: number | null;
+  batters_predicted: number | null;
+  opp_exp_h: number | null;
+  opp_exp_k: number | null;
+  opp_exp_hr: number | null;
+};
+
+export const getPitcherBoard = () => getJSON<PitcherBoardRow[]>("/api/public/pitchers");
+
 export const getSummary = () => getJSON<Summary>("/api/public/summary");
 export const getFeed = (days = 7) => getJSON<Feed>(`/api/public/feed?days=${days}`);
 export const getTeam = (abbrev: string) =>

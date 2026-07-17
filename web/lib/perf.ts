@@ -16,7 +16,7 @@ export type ResultRow = {
   market_total: number | null;
 };
 
-export function skillCurve(rows: ResultRow[]) {
+export function confidenceCurve(rows: ResultRow[]) {
   // accuracy + share of games kept, when only counting picks at or above a
   // minimum win chance
   const out: { threshold: number; accuracy: number; coverage: number }[] = [];
@@ -33,9 +33,47 @@ export function skillCurve(rows: ResultRow[]) {
   return out;
 }
 
-// Over/under skill curve: grade the model's side of the market's total line,
-// counting only games where the model's total is at least `edge` runs off the
-// line. Pushes (final total exactly on the line) grade nobody and are dropped.
+// Thin a date series for rendering (markers need breathing room), always
+// keeping the last point so the curve ends where the record does.
+function thinSeries<T>(points: T[], max = 120): T[] {
+  const step = Math.max(1, Math.ceil(points.length / max));
+  return points.filter((_, i) => i % step === 0 || i === points.length - 1);
+}
+
+// Skill curve (the hoopmodel chart): running total of correct picks minus
+// half the games played, per day. A coin-flipper drifts along zero; skill
+// climbs. Both series count only games with a market line — and skip games
+// the market prices dead even (no favorite) — so the market-favorite
+// benchmark is on the same footing.
+export function skillCurve(rows: ResultRow[]) {
+  const lined = rows.filter((r) => r.market_p_home != null && r.market_p_home !== 0.5);
+  const byDate = new Map<string, { model: number; market: number; n: number }>();
+  for (const r of lined) {
+    const d = byDate.get(r.game_date) ?? { model: 0, market: 0, n: 0 };
+    d.n += 1;
+    if ((r.p_home >= 0.5) === r.home_won) d.model += 1;
+    if ((r.market_p_home! > 0.5) === r.home_won) d.market += 1;
+    byDate.set(r.game_date, d);
+  }
+  let model = 0;
+  let market = 0;
+  const out = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => {
+      model += d.model - d.n / 2;
+      market += d.market - d.n / 2;
+      return {
+        date,
+        model: Math.round(model * 10) / 10,
+        market: Math.round(market * 10) / 10,
+      };
+    });
+  return thinSeries(out);
+}
+
+// The same running total for the over/under: our side of the market's total
+// line, right calls minus half the games. Pushes (final total exactly on the
+// line) grade nobody, and a predicted total exactly on the line is no call.
 export function totalSkillCurve(rows: ResultRow[]) {
   const graded = rows.filter(
     (r) =>
@@ -45,20 +83,21 @@ export function totalSkillCurve(rows: ResultRow[]) {
       r.total !== r.market_total &&
       r.pred_total !== r.market_total,
   );
-  const out: { edge: number; accuracy: number; coverage: number }[] = [];
-  for (let e = 0; e <= 3; e += 0.25) {
-    const kept = graded.filter((r) => Math.abs(r.pred_total! - r.market_total!) >= e);
-    if (kept.length < 30) break;
-    const correct = kept.filter(
-      (r) => (r.pred_total! > r.market_total!) === (r.total! > r.market_total!),
-    ).length;
-    out.push({
-      edge: e,
-      accuracy: (100 * correct) / kept.length,
-      coverage: (100 * kept.length) / graded.length,
-    });
+  const byDate = new Map<string, { c: number; n: number }>();
+  for (const r of graded) {
+    const d = byDate.get(r.game_date) ?? { c: 0, n: 0 };
+    d.n += 1;
+    if ((r.pred_total! > r.market_total!) === (r.total! > r.market_total!)) d.c += 1;
+    byDate.set(r.game_date, d);
   }
-  return out;
+  let cum = 0;
+  const out = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => {
+      cum += d.c - d.n / 2;
+      return { date, model: Math.round(cum * 10) / 10 };
+    });
+  return thinSeries(out);
 }
 
 // Head-to-head vs the market on the games where we have a pregame line:
@@ -85,27 +124,6 @@ export function marketComparison(rows: ResultRow[]) {
     marketTotalMiss: miss((r) => Math.abs(r.market_total! - r.total!)),
     totalsN: totals.length,
   };
-}
-
-// Month-by-month winners-called rate, model vs the market favorite, on the
-// same games. Months with too few lined games are dropped (noise).
-export function monthlyVsMarket(rows: ResultRow[]) {
-  const byMonth = new Map<string, ResultRow[]>();
-  for (const r of rows) {
-    if (r.market_p_home == null) continue;
-    const m = r.game_date.slice(0, 7);
-    byMonth.set(m, [...(byMonth.get(m) ?? []), r]);
-  }
-  return [...byMonth.entries()]
-    .filter(([, v]) => v.length >= 15)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, v]) => ({
-      month,
-      n: v.length,
-      model: (100 * v.filter((r) => (r.p_home >= 0.5) === r.home_won).length) / v.length,
-      market:
-        (100 * v.filter((r) => (r.market_p_home! >= 0.5) === r.home_won).length) / v.length,
-    }));
 }
 
 export function roc(rows: ResultRow[]) {

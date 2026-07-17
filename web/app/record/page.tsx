@@ -8,12 +8,12 @@ import { pctLabel } from "@/lib/copy";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import { sinceDate, WindowKey } from "@/lib/windows";
 import {
+  ConfidenceCurveChart,
   ConfusionMatrix,
   MarginMissChart,
   RocChart,
   SkillCurveChart,
   TotalSkillCurveChart,
-  VsMarketChart,
 } from "@/components/charts";
 
 export default function RecordPage() {
@@ -112,7 +112,7 @@ export default function RecordPage() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Under the hood</h2>
           <div className="grid gap-4 lg:grid-cols-2">
-            <SkillCurveChart rows={view} />
+            <ConfidenceCurveChart rows={view} />
             <RocChart rows={view} />
             <MarginMissChart rows={view} />
             <ConfusionMatrix rows={view} />
@@ -159,7 +159,7 @@ export default function RecordPage() {
                 />
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <VsMarketChart rows={view} />
+                <SkillCurveChart rows={view} />
                 <TotalSkillCurveChart rows={view} />
               </div>
               <p className="text-xs text-zinc-400">
@@ -170,9 +170,9 @@ export default function RecordPage() {
           ) : (
             <p className="text-sm text-zinc-500">
               Only {market?.n ?? 0} game{(market?.n ?? 0) === 1 ? " has" : "s have"} a
-              stored pregame line in this window — we archive lines for
-              2023–25 and capture them daily going forward. Pick a longer
-              window to see the head-to-head.
+              stored pregame line in this window — we archive lines from 2023
+              onward and capture them daily. Pick a longer window to see the
+              head-to-head.
             </p>
           )}
         </section>

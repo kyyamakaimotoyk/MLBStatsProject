@@ -93,33 +93,6 @@ export default function RecordPage() {
         <p className="text-sm text-zinc-500">No graded games in this window yet.</p>
       )}
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">The last three weeks, pick by pick</h2>
-        <p className="text-sm text-zinc-500">
-          One square per game, oldest to newest. Tap any square for the call
-          and the final score.
-        </p>
-        {feed ? <PicksStrip games={gradedGames} /> : <p className="text-sm text-zinc-500">Loading…</p>}
-        {gradedGames.length > 0 && (
-          <p className="text-sm text-zinc-500">
-            {gradedGames.filter((g) => g.correct).length}–
-            {gradedGames.filter((g) => !g.correct).length} over this stretch
-          </p>
-        )}
-      </section>
-
-      {view.length > 100 && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Under the hood</h2>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ConfidenceCurveChart rows={view} />
-            <RocChart rows={view} />
-            <MarginMissChart rows={view} />
-            <ConfusionMatrix rows={view} />
-          </div>
-        </section>
-      )}
-
       {rows && view.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">The model vs the market</h2>
@@ -175,6 +148,33 @@ export default function RecordPage() {
               head-to-head.
             </p>
           )}
+        </section>
+      )}
+
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">The last three weeks, pick by pick</h2>
+        <p className="text-sm text-zinc-500">
+          One square per game, oldest to newest. Tap any square for the call
+          and the final score.
+        </p>
+        {feed ? <PicksStrip games={gradedGames} /> : <p className="text-sm text-zinc-500">Loading…</p>}
+        {gradedGames.length > 0 && (
+          <p className="text-sm text-zinc-500">
+            {gradedGames.filter((g) => g.correct).length}–
+            {gradedGames.filter((g) => !g.correct).length} over this stretch
+          </p>
+        )}
+      </section>
+
+      {view.length > 100 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Under the hood</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ConfidenceCurveChart rows={view} />
+            <RocChart rows={view} />
+            <MarginMissChart rows={view} />
+            <ConfusionMatrix rows={view} />
+          </div>
         </section>
       )}
       {view.length > 0 && view.length <= 100 && (

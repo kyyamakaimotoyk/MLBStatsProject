@@ -76,8 +76,8 @@ export function ConfidenceCurveChart({ rows }: { rows: ResultRow[] }) {
   const data = confidenceCurve(rows);
   return (
     <ChartPanel
-      title="Picking our spots"
-      sub="When we only count games where the model is more confident, how often is it right — and how many games is that?"
+      title="Hit rate by pick confidence"
+      sub="Confidence is the win chance the model gave its own pick. The orange line is the hit rate counting only picks at least that confident; the blue line is the share of games that clears the bar. A well-behaved model climbs from left to right — its surer picks should land more often. The dashed line is coin-flip."
     >
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
@@ -100,13 +100,13 @@ export function ConfidenceCurveChart({ rows }: { rows: ResultRow[] }) {
             contentStyle={tooltipStyle}
             formatter={(v, name) => [
               `${Number(v).toFixed(1)}%`,
-              String(name) === "accuracy" ? "Winners called" : "Share of games",
+              String(name) === "accuracy" ? "Hit rate" : "Share of games",
             ]}
             labelFormatter={(v) => `Confidence at least ${v}%`}
           />
           <Legend
             verticalAlign="top"
-            formatter={(v) => (v === "accuracy" ? "Winners called" : "Share of games kept")}
+            formatter={(v) => (v === "accuracy" ? "Hit rate" : "Share of games kept")}
             wrapperStyle={{ fontSize: 12 }}
           />
           <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />

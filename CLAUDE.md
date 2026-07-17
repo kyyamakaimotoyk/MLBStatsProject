@@ -89,7 +89,15 @@ invalidation. To ship API changes: build `Dockerfile.api`, push to ECR
 ```powershell
 .venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
 cd web; npm run dev                              # local frontend on :3000
+.venv\Scripts\python visualization\site_traffic.py   # local-only traffic dashboard on :8050
 ```
+
+Site analytics: CloudFront access logs land in `mlb-stats-logs-<account>`
+under `cf-site/` (90-day TTL) and are queried through Athena (Glue table
+`moundmodel_logs.cf_site_logs`, workgroup `mlb-stats` — `infra/analytics.tf`).
+The dashboard deps live in `visualization/requirements-viz.txt`, deliberately
+out of the root `requirements.txt` so the Docker images don't inherit them.
+Internal only — never surface this data on the public site.
 
 ## Automation (Phase 6)
 

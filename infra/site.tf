@@ -87,6 +87,14 @@ resource "aws_cloudfront_distribution" "site" {
   aliases             = [var.site_domain, "www.${var.site_domain}"]
   price_class         = "PriceClass_100"
 
+  # Access logs -> S3, queried through Athena. See cf_logs.tf for the bucket +
+  # ACL setup and analytics.tf for the Glue table.
+  logging_config {
+    bucket          = aws_s3_bucket.logs.bucket_domain_name
+    prefix          = "cf-site/"
+    include_cookies = false
+  }
+
   origin {
     domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
     origin_id                = "s3-site"

@@ -1,0 +1,6 @@
+# Local-only dashboard deps (visualization/site_traffic.py). Kept separate from
+# the root requirements.txt so Dockerfile.pipeline doesn't install them.
+dash>=3.0
+dash-bootstrap-components>=2.0
+plotly>=6.0
+pyathena[pandas]>=3.9

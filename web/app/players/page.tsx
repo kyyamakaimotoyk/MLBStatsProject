@@ -15,6 +15,7 @@ type BatterRow = {
   probable_pitcher: string | null;
   p_hit: number | null;
   p_hr: number | null;
+  p_tb2: number | null;
   exp_h: number | null;
   exp_tb: number | null;
 };
@@ -32,7 +33,10 @@ export default function PlayersPage() {
     getPitcherBoard()
       .then((rows) =>
         setPitchers(
-          [...rows].sort((a, b) => (b.opp_exp_k ?? -1) - (a.opp_exp_k ?? -1)),
+          [...rows].sort(
+            (a, b) =>
+              (b.sp_exp_k ?? b.opp_exp_k ?? -1) - (a.sp_exp_k ?? a.opp_exp_k ?? -1),
+          ),
         ),
       )
       .catch(() => setPitchers([]));
@@ -82,6 +86,10 @@ export default function PlayersPage() {
 
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Tonight's hitter board</h2>
+        <p className="text-sm text-zinc-500">
+          Ranked by home-run chance — the call that separates hitters most on
+          any given night.
+        </p>
         {!board && <p className="text-sm text-zinc-500">Loading…</p>}
         {board && board.length === 0 && (
           <p className="text-sm text-zinc-500">No hitter predictions posted yet today.</p>
@@ -94,9 +102,9 @@ export default function PlayersPage() {
                   <th className="px-3 py-2">Hitter</th>
                   <th className="px-3 py-2">Game</th>
                   <th className="px-3 py-2">Facing</th>
-                  <th className="px-3 py-2 text-right">Gets a hit</th>
                   <th className="px-3 py-2 text-right">Homers</th>
-                  <th className="px-3 py-2 text-right">Hits expected</th>
+                  <th className="px-3 py-2 text-right">2+ total bases</th>
+                  <th className="px-3 py-2 text-right">Gets a hit</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,25 +122,29 @@ export default function PlayersPage() {
                       {r.away} @ {r.home}
                     </td>
                     <td className="px-3 py-2 text-zinc-500">{r.probable_pitcher ?? "TBD"}</td>
-                    <td className="px-3 py-2 text-right">{pctLabel(r.p_hit)}</td>
-                    <td className="px-3 py-2 text-right">{pctLabel(r.p_hr)}</td>
-                    <td className="px-3 py-2 text-right">
-                      {r.exp_h != null ? r.exp_h.toFixed(1) : "—"}
-                    </td>
+                    <td className="px-3 py-2 text-right font-medium">{pctLabel(r.p_hr)}</td>
+                    <td className="px-3 py-2 text-right">{pctLabel(r.p_tb2)}</td>
+                    <td className="px-3 py-2 text-right text-zinc-500">{pctLabel(r.p_hit)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        <p className="text-xs text-zinc-400">
+          Chances cover the whole game. We lead with home runs and extra bases
+          because they separate hitters — most starters get a hit on any given
+          night, so &quot;gets a hit&quot; runs 50–70% for nearly everyone.
+        </p>
       </section>
 
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Tonight's pitching matchups</h2>
         <p className="text-sm text-zinc-500">
-          Every probable starter, with what our hitter model expects the lineup
-          facing them to do over the whole game — our per-hitter calls, added
-          up. Most strikeouts expected first.
+          Every probable starter, with what our model expects them to allow
+          while they&apos;re in the game — strikeouts, walks, and hits, built
+          from our per-hitter calls against the exact lineup they face. Most
+          strikeouts expected first.
         </p>
         {!pitchers && <p className="text-sm text-zinc-500">Loading…</p>}
         {pitchers && pitchers.length === 0 && (
@@ -149,8 +161,8 @@ export default function PlayersPage() {
                   <th className="px-3 py-2 text-right">WHIP</th>
                   <th className="px-3 py-2 text-right">K/9</th>
                   <th className="px-3 py-2 text-right">Ks expected</th>
+                  <th className="px-3 py-2 text-right">Walks expected</th>
                   <th className="px-3 py-2 text-right">Hits allowed expected</th>
-                  <th className="px-3 py-2 text-right">HR allowed expected</th>
                 </tr>
               </thead>
               <tbody>
@@ -184,13 +196,13 @@ export default function PlayersPage() {
                       {r.k9 != null ? r.k9.toFixed(1) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right font-medium">
-                      {r.opp_exp_k != null ? r.opp_exp_k.toFixed(1) : "—"}
+                      {r.sp_exp_k != null ? r.sp_exp_k.toFixed(1) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {r.opp_exp_h != null ? r.opp_exp_h.toFixed(1) : "—"}
+                      {r.sp_exp_bb != null ? r.sp_exp_bb.toFixed(1) : "—"}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {r.opp_exp_hr != null ? r.opp_exp_hr.toFixed(1) : "—"}
+                      {r.sp_exp_h != null ? r.sp_exp_h.toFixed(1) : "—"}
                     </td>
                   </tr>
                 ))}
@@ -199,9 +211,10 @@ export default function PlayersPage() {
           </div>
         )}
         <p className="text-xs text-zinc-400">
-          Season numbers are through last night. "Expected" columns come from
-          our hitter model and cover the opposing lineup's full game, including
-          after the starter leaves.
+          Season numbers are through last night. &quot;Expected&quot; columns
+          cover only the starter&apos;s share of the game — how long he
+          typically lasts, against tonight&apos;s exact lineup — so they read
+          like a real pitching line.
         </p>
       </section>
     </div>

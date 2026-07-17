@@ -127,9 +127,31 @@ def _batter_bundle(target_date: str) -> dict:
         WHERE g.is_final AND l.batting_order BETWEEN 1 AND 9 AND b.pa IS NOT NULL
           AND COALESCE(g.scheduled_innings, 9) = 9
     """), engine).astype({"pa": int})
+    # B3 (shipped 2026-07-17): isotonic calibrator for the p_hit head, fit on
+    # stored out-of-sample predictions vs outcomes (walk-forward backfill +
+    # prior daily runs). p_hr stays raw — its calibration gain never cleared
+    # significance (never ship a calibrator without demonstrated benefit).
+    cal_hit = None
+    cal_rows = pd.read_sql(text("""
+        SELECT DISTINCT ON (bp.game_pk, bp.player_id)
+               bp.p_hit, (bg.h >= 1)::int AS hit1
+        FROM batter_predictions bp
+        JOIN batter_game_lines bg
+          ON bg.game_pk = bp.game_pk AND bg.player_id = bp.player_id
+        JOIN games g ON g.game_pk = bp.game_pk AND g.is_final
+        WHERE bp.p_hit IS NOT NULL AND bg.h IS NOT NULL
+        ORDER BY bp.game_pk, bp.player_id,
+                 (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+    """), engine)
+    if len(cal_rows) >= 10_000:
+        from sklearn.isotonic import IsotonicRegression
+        cal_hit = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+        cal_hit.fit(cal_rows["p_hit"].to_numpy(float), cal_rows["hit1"].to_numpy(float))
+        log.info("p_hit isotonic calibrator fit on %d graded predictions", len(cal_rows))
     bundle = {"model": model, "feats": feats, "w": float(w),
               "league_row": league_row,
               "pa_dists": bm.build_pa_dists(slot_pa, MAX_PA),
+              "cal_hit": cal_hit,
               "trained_through": str(pa["game_date"].max())[:10]}
     _save_bundle("batter_pa_latest.joblib", bundle)
     return bundle
@@ -341,6 +363,10 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
     dist = bm.pa_lookup(bundle["pa_dists"])(frame["lineup_slot"].to_numpy(),
                                             frame["is_home"].to_numpy())
     agg = bm.aggregate_game(probs, dist)
+    # B3 (shipped): calibrate the p_hit head when the bundle carries a
+    # calibrator (older bundles predate it and stay raw until retrain)
+    if bundle.get("cal_hit") is not None:
+        agg["p_hit"] = bundle["cal_hit"].predict(agg["p_hit"])
 
     warnings = []
     if not np.all((agg["p_hit"] > 0.20) & (agg["p_hit"] < 0.90)):
@@ -374,6 +400,58 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
                 p_hit = EXCLUDED.p_hit, p_hr = EXCLUDED.p_hr,
                 p_tb2 = EXCLUDED.p_tb2, p_bb = EXCLUDED.p_bb, created_at = now()
         """), records.to_dict("records"))
+
+    # B7 (shipped 2026-07-17): starter-scoped heads. exp_k/bb/h = w_sp x
+    # sum over the opposing nine of exp_pa x P(outcome | vs this SP), with
+    # w_sp = the starter's own expected PA share (clip(IP_per_start/9,
+    # .40, .85); walk-forward: K MAE 1.812 vs 1.888 SP-marginal, p<.0001).
+    if has_sp.any():
+        from features.batter_features import CLASSES
+        i_k = CLASSES.index("K")
+        i_bb = CLASSES.index("BB")
+        hit_idx = [CLASSES.index(c) for c in ("1B", "2B", "3B", "HR")]
+        sp_look = team_features._sp_lookup(team_features._load_starts(asof))
+        game_dates = {g.game_pk: pd.Timestamp(g.game_date).to_datetime64()
+                      for g in slate.itertuples()}
+        sub = frame[has_sp]
+        sp_rows = pd.DataFrame({
+            "game_pk": sub["game_pk"].to_numpy(),
+            "sp_id": sub["sp_id"].to_numpy(),
+            "k": agg["exp_pa"][has_sp] * p_sp[:, i_k],
+            "bb": agg["exp_pa"][has_sp] * p_sp[:, i_bb],
+            "h": agg["exp_pa"][has_sp] * p_sp[:, hit_idx].sum(axis=1),
+        })
+        sp_g = sp_rows.groupby(["game_pk", "sp_id"], as_index=False).agg(
+            n_batters=("k", "size"), k=("k", "sum"), bb=("bb", "sum"), h=("h", "sum"))
+        sp_g = sp_g[sp_g["n_batters"] == 9].copy()
+        if len(sp_g):
+            w_sp = []
+            for r in sp_g.itertuples():
+                ip = sp_look(int(r.sp_id), game_dates[r.game_pk]) \
+                    .get("SP_IP_PER_START_L10", np.nan)
+                w_sp.append(bundle["w"] if ip is None or np.isnan(ip)
+                            else float(np.clip(ip / 9.0, 0.40, 0.85)))
+            sp_g["w_sp"] = w_sp
+            for c in ("k", "bb", "h"):
+                sp_g[c] = sp_g["w_sp"] * sp_g[c]
+            sp_recs = sp_g.rename(columns={"k": "exp_k", "bb": "exp_bb", "h": "exp_h"}) \
+                .assign(model_version=VERSION, data_through_date=asof)
+            sp_recs = sp_recs.astype(object).where(sp_recs.notna(), None)
+            with get_engine().begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO pitcher_predictions
+                        (game_pk, sp_id, model_version, data_through_date,
+                         w_sp, n_batters, exp_k, exp_bb, exp_h)
+                    VALUES (:game_pk, :sp_id, :model_version, :data_through_date,
+                            :w_sp, :n_batters, :exp_k, :exp_bb, :exp_h)
+                    ON CONFLICT (game_pk, sp_id, model_version) DO UPDATE SET
+                        data_through_date = EXCLUDED.data_through_date,
+                        w_sp = EXCLUDED.w_sp, n_batters = EXCLUDED.n_batters,
+                        exp_k = EXCLUDED.exp_k, exp_bb = EXCLUDED.exp_bb,
+                        exp_h = EXCLUDED.exp_h, created_at = now()
+                """), sp_recs.to_dict("records"))
+            log.info("wrote %d starter predictions", len(sp_recs))
+
     result.attrs["warnings"] = warnings
     return result
 

@@ -64,6 +64,12 @@ def _load_game_side_data():
         SELECT game_pk, player_id, pa, h, tb, hr, bb, so AS k
         FROM batter_game_lines
     """), engine)
+    # B7: the starter's actual line, for pitcher-level evaluation
+    actual_sp = pd.read_sql(text("""
+        SELECT game_pk, player_id AS sp_id, so AS sp_k, bb AS sp_bb, h AS sp_h,
+               outs AS sp_outs
+        FROM pitcher_game_lines WHERE is_starter
+    """), engine)
 
     # opponent's starter for each lineup row
     lineups["game_date"] = pd.to_datetime(lineups["game_date"])
@@ -90,7 +96,7 @@ def _load_game_side_data():
                             on="sp_id", how="left")
     lineups = lineups.merge(players[["player_id", "bats"]], on="player_id", how="left")
     lineups = lineups.merge(actual_bat, on=["game_pk", "player_id"], how="left")
-    return lineups
+    return lineups, actual_sp
 
 
 # Matchup assembly lives in modeling.batter_model.assemble_matchup — shared
@@ -106,7 +112,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
     pa = comp["pa"]
     feats = select_features(list(pa.columns), "batter_pa")
     park = comp["park"]
-    sides = _load_game_side_data()
+    sides, actual_sp = _load_game_side_data()
 
     # league share of PAs taken by the game's starter (mixing weight w)
     starters = pd.read_sql(text(
@@ -127,7 +133,11 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                                ("base_h", "base_k", "b1_h", "b1_k", "b2_k",
                                 "hit1", "hr1", "p_hit", "p_hr",
                                 "p_hit_cal", "p_hr_cal",
-                                "b4_ll", "nob4_ll", "nob4_h", "nob4_k")}
+                                "b4_ll", "nob4_ll", "nob4_h", "nob4_k",
+                                # B7: per-starter absolute errors
+                                "spk_m", "spk_base", "spk_board", "spk_wsp",
+                                "spbb_m", "spbb_base", "spbb_wsp",
+                                "sph_m", "sph_base", "sph_wsp")}
     calib_hist = {"p_hit": [], "p_hr": [], "hit1": [], "hr1": []}
     feats_nob4 = [c for c in feats if c not in B4_COLS]
 
@@ -189,6 +199,53 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                          for s, d in zip(eligible["sp_id"], eligible["game_date"])])
         agg_b1 = bm.aggregate_game(w_sp[:, None] * p_sp + (1 - w_sp[:, None]) * p_lg,
                                    pa_dist)
+
+        # ---- B7: starter-scoped pitcher heads by aggregation. Predicted
+        # starter K = sum over the opposing nine of (expected PAs x SP share)
+        # x P(K | vs this SP per PA); same construction for BB and hits
+        # allowed. Baselines: the SP's own shrunken marginal rates aggregated
+        # identically, and the whole-game mixed sum the pitchers board shows
+        # today (w-scaled). Only (game, SP) groups with all nine batters
+        # predicted are evaluated.
+        i_k7 = CLASSES.index("K")
+        i_bb7 = CLASSES.index("BB")
+        hit_idx = [CLASSES.index(c) for c in ("1B", "2B", "3B", "HR")]
+        sp_rows = pd.DataFrame({
+            "game_pk": eligible["game_pk"].to_numpy(),
+            "sp_id": eligible["sp_id"].to_numpy(),
+            "m_k": agg["exp_pa"] * p_sp[:, i_k7],
+            "m_bb": agg["exp_pa"] * p_sp[:, i_bb7],
+            "m_h": agg["exp_pa"] * p_sp[:, hit_idx].sum(axis=1),
+            "b_k": agg["exp_pa"] * vs_sp["P_rate_K"].to_numpy(float),
+            "b_bb": agg["exp_pa"] * vs_sp["P_rate_BB"].to_numpy(float),
+            "b_h": agg["exp_pa"] * vs_sp[["P_rate_1B", "P_rate_2B", "P_rate_3B",
+                                          "P_rate_HR"]].to_numpy(float).sum(axis=1),
+            "board_k": agg["exp_k"],
+            "wsp_k": w_sp * agg["exp_pa"] * p_sp[:, i_k7],
+            "wsp_bb": w_sp * agg["exp_pa"] * p_sp[:, i_bb7],
+            "wsp_h": w_sp * agg["exp_pa"] * p_sp[:, hit_idx].sum(axis=1),
+        })
+        sp_g = sp_rows.groupby(["game_pk", "sp_id"], as_index=False).agg(
+            n=("m_k", "size"), m_k=("m_k", "sum"), m_bb=("m_bb", "sum"),
+            m_h=("m_h", "sum"), b_k=("b_k", "sum"), b_bb=("b_bb", "sum"),
+            b_h=("b_h", "sum"), board_k=("board_k", "sum"), wsp_k=("wsp_k", "sum"),
+            wsp_bb=("wsp_bb", "sum"), wsp_h=("wsp_h", "sum"))
+        sp_g = sp_g[sp_g["n"] == 9].merge(actual_sp, on=["game_pk", "sp_id"],
+                                          how="inner")
+        # the SP faces ~w of each batter's PAs (league constant, as in the
+        # game mixture); wsp_k already carries its per-SP share
+        for col in ("m_k", "m_bb", "m_h", "b_k", "b_bb", "b_h", "board_k"):
+            sp_g[col] = w * sp_g[col]
+        pooled["spk_m"].append(np.abs(sp_g["sp_k"] - sp_g["m_k"]).to_numpy())
+        pooled["spk_base"].append(np.abs(sp_g["sp_k"] - sp_g["b_k"]).to_numpy())
+        pooled["spk_board"].append(np.abs(sp_g["sp_k"] - sp_g["board_k"]).to_numpy())
+        pooled["spk_wsp"].append(np.abs(sp_g["sp_k"] - sp_g["wsp_k"]).to_numpy())
+        pooled["spbb_m"].append(np.abs(sp_g["sp_bb"] - sp_g["m_bb"]).to_numpy())
+        pooled["spbb_base"].append(np.abs(sp_g["sp_bb"] - sp_g["b_bb"]).to_numpy())
+        pooled["spbb_wsp"].append(np.abs(sp_g["sp_bb"] - sp_g["wsp_bb"]).to_numpy())
+        pooled["sph_m"].append(np.abs(sp_g["sp_h"] - sp_g["m_h"]).to_numpy())
+        pooled["sph_base"].append(np.abs(sp_g["sp_h"] - sp_g["b_h"]).to_numpy())
+        pooled["sph_wsp"].append(np.abs(sp_g["sp_h"] - sp_g["wsp_h"]).to_numpy())
 
         # ---- B2: blend the K probability halfway back to the batter marginal
         i_k = CLASSES.index("K")
@@ -262,6 +319,16 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
             metrics[f"brier_{head}_base"] = float(np.mean((agg_base[head] - hit) ** 2))
             metrics[f"obs_rate_{head}"] = float(hit.mean())
             metrics[f"pred_rate_{head}"] = float(agg[head].mean())
+        # B7 per-starter heads
+        metrics["n_sp_games"] = int(len(sp_g))
+        for name, pred_col, act_col in (("spk", "m_k", "sp_k"), ("spbb", "m_bb", "sp_bb"),
+                                        ("sph", "m_h", "sp_h")):
+            metrics[f"mae_{name}"] = float(np.mean(np.abs(sp_g[act_col] - sp_g[pred_col])))
+        metrics["mae_spk_base"] = float(np.mean(np.abs(sp_g["sp_k"] - sp_g["b_k"])))
+        metrics["mae_spk_board"] = float(np.mean(np.abs(sp_g["sp_k"] - sp_g["board_k"])))
+        metrics["mae_spk_wsp"] = float(np.mean(np.abs(sp_g["sp_k"] - sp_g["wsp_k"])))
+        metrics["mae_spbb_base"] = float(np.mean(np.abs(sp_g["sp_bb"] - sp_g["b_bb"])))
+        metrics["mae_sph_base"] = float(np.mean(np.abs(sp_g["sp_h"] - sp_g["b_h"])))
         log.info("season %d game-level: %s", season,
                  {k: round(v, 4) for k, v in metrics.items() if k.startswith(("mae", "brier"))})
 
@@ -323,6 +390,21 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         t = ttest_rel((P[f"{head}_cal"] - P[y_key]) ** 2, (P[head] - P[y_key]) ** 2)
         print(f"  B3 isotonic, Brier {head}: {calb:.5f} vs {raw:.5f} "
               f"| paired-t p={t.pvalue:.4f} (2023 uncalibrated either way)")
+    if len(pooled["spk_m"]):
+        print(f"\n=== B7 starter heads, pooled paired verdicts "
+              f"({len(np.concatenate(pooled['spk_m']))} starter-games) ===")
+        for label, a_key, b_key in (
+                ("K: model vs SP-marginal", "spk_m", "spk_base"),
+                ("K: model vs whole-game board sum (w-scaled)", "spk_m", "spk_board"),
+                ("K: per-SP workload w vs league w", "spk_wsp", "spk_m"),
+                ("BB: model vs SP-marginal", "spbb_m", "spbb_base"),
+                ("BB: per-SP workload w vs league w", "spbb_wsp", "spbb_m"),
+                ("H allowed: model vs SP-marginal", "sph_m", "sph_base"),
+                ("H allowed: per-SP workload w vs league w", "sph_wsp", "sph_m")):
+            a, b = np.concatenate(pooled[a_key]), np.concatenate(pooled[b_key])
+            t = ttest_rel(a, b)
+            print(f"  {label}: {a.mean():.4f} vs {b.mean():.4f} "
+                  f"| paired-t p={t.pvalue:.4f}")
     if pooled["b4_ll"] and pooled["b4_ll"][0] is not None and len(pooled["b4_ll"]):
         ll_a, ll_b = np.concatenate(pooled["b4_ll"]), np.concatenate(pooled["nob4_ll"])
         t = ttest_rel(ll_a, ll_b)

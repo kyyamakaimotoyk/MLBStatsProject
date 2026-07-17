@@ -9,6 +9,7 @@ import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import { sinceDate, WindowKey } from "@/lib/windows";
 import {
   BatterSkillCurveChart,
+  HrWatchCurveChart,
   ConfidenceCurveChart,
   ConfusionMatrix,
   MarginMissChart,
@@ -132,8 +133,8 @@ export default function RecordPage() {
                   metric={`${market.disagreeWins.toLocaleString()}–${(
                     market.disagreeN - market.disagreeWins
                   ).toLocaleString()}`}
-                  line1="when we take the other side"
-                  line2={`our record in the ${market.disagreeN.toLocaleString()} games where we disagree with the market favorite`}
+                  line1="our picks against the market favorite"
+                  line2={`we called the upset ${market.disagreeN.toLocaleString()} times this window — this is how those calls went`}
                 />
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
@@ -160,11 +161,15 @@ export default function RecordPage() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">The hitter calls</h2>
           <p className="text-sm text-zinc-500">
-            Every night the model answers &quot;gets a hit tonight?&quot; for each
-            starter in the lineup — {batterCalls.toLocaleString()} calls graded
-            in this window.
+            The call that separates hitters is the home run, so that&apos;s the
+            one we lead with: every night the model names its five likeliest
+            hitters to go deep, and we grade the list against chance. The
+            &quot;gets a hit?&quot; call is graded too —{" "}
+            {batterCalls.toLocaleString()} calls in this window — but most
+            starters do get a hit, so it&apos;s the easier test.
           </p>
           <div className="grid gap-4 lg:grid-cols-2">
+            <HrWatchCurveChart days={batterView} />
             <BatterSkillCurveChart days={batterView} />
           </div>
         </section>

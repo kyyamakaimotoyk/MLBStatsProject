@@ -79,6 +79,9 @@ export type BatterDay = {
   n: number;
   model_correct: number;
   always_yes_correct: number;
+  hr_base_hits: number;
+  hr_watch_n: number;
+  hr_watch_hits: number;
 };
 
 export function batterSkillCurve(days: BatterDay[]) {
@@ -91,6 +94,21 @@ export function batterSkillCurve(days: BatterDay[]) {
     .map((d) => {
       edge += d.model_correct - d.always_yes_correct;
       return { date: d.game_date, edge };
+    });
+  return thinSeries(out);
+}
+
+// HR watch: each day the model names its five likeliest home-run hitters.
+// The fair benchmark is chance — five random starters homer at that day's
+// base rate — so the curve accumulates homers by our five above that pace.
+export function hrWatchCurve(days: BatterDay[]) {
+  let edge = 0;
+  const out = [...days]
+    .filter((d) => d.hr_watch_n > 0 && d.n > 0)
+    .sort((a, b) => a.game_date.localeCompare(b.game_date))
+    .map((d) => {
+      edge += d.hr_watch_hits - (d.hr_watch_n * d.hr_base_hits) / d.n;
+      return { date: d.game_date, edge: Math.round(edge * 10) / 10 };
     });
   return thinSeries(out);
 }
@@ -132,7 +150,11 @@ export function marketComparison(rows: ResultRow[]) {
   if (lined.length === 0) return null;
   const modelRight = (r: ResultRow) => (r.p_home >= 0.5) === r.home_won;
   const marketRight = (r: ResultRow) => (r.market_p_home! >= 0.5) === r.home_won;
-  const disagree = lined.filter((r) => (r.p_home >= 0.5) !== (r.market_p_home! >= 0.5));
+  // A dead-even line has no favorite to disagree with (skillCurve skips
+  // those games for the same reason).
+  const disagree = lined.filter(
+    (r) => r.market_p_home !== 0.5 && (r.p_home >= 0.5) !== (r.market_p_home! >= 0.5),
+  );
   const totals = lined.filter(
     (r) => r.pred_total != null && r.total != null && r.market_total != null,
   );

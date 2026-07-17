@@ -237,6 +237,98 @@ def _ump_factors(max_date) -> dict:
     return out
 
 
+def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    a = (np.sin((p2 - p1) / 2) ** 2
+         + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2)
+    return float(2 * 6371.0 * np.arcsin(np.sqrt(a)))
+
+
+def _travel_lookup(games: pd.DataFrame):
+    """Travel burden from the team's PREVIOUS final game (E8e): great-circle
+    km and signed time-zone shift approximated from longitude (+ = eastward).
+    Season-scoped — a team's first game of the season is NaN. One
+    implementation shared by the historical build and the prediction path.
+    Returns lookup(team_id, season, date64, venue_id) -> dict."""
+    coords = _load_simple(
+        "SELECT venue_id, latitude, longitude FROM venues").set_index("venue_id")
+    lat = coords["latitude"].to_dict()
+    lon = coords["longitude"].to_dict()
+
+    side_rows = []
+    for side in ("home", "away"):
+        part = games[["game_pk", "season", "game_date", "first_pitch_utc",
+                      "venue_id"]].copy()
+        part["team_id"] = games[f"{side}_team_id"]
+        side_rows.append(part)
+    tg = pd.concat(side_rows, ignore_index=True).sort_values(
+        ["game_date", "first_pitch_utc", "game_pk"])
+    book = {}
+    for (team_id, season), grp in tg.groupby(["team_id", "season"], sort=False):
+        book[(team_id, season)] = (grp["game_date"].to_numpy(),
+                                   grp["venue_id"].to_numpy())
+
+    def lookup(team_id, season, date64, venue_id) -> dict:
+        out = {"TRAVEL_KM": np.nan, "TRAVEL_TZ_DELTA": np.nan}
+        arr = book.get((team_id, season))
+        if arr is None:
+            return out
+        dates, venues = arr
+        cut = int(np.searchsorted(dates, date64, side="left"))
+        if cut == 0:
+            return out
+        prev = venues[cut - 1]
+        vals = (lat.get(prev), lon.get(prev), lat.get(venue_id), lon.get(venue_id))
+        if any(v is None or pd.isna(v) for v in vals):
+            return out
+        out["TRAVEL_KM"] = _haversine_km(vals[0], vals[1], vals[2], vals[3])
+        out["TRAVEL_TZ_DELTA"] = float((vals[3] - vals[1]) / 15.0)
+        return out
+
+    return lookup
+
+
+def _venue_env_lookup(games: pd.DataFrame):
+    """Rolling venue scoring environment (E8f): mean total runs over the last
+    40 final 9-inning-scheduled games at the venue, divided by the league mean
+    total over the trailing 365 days. NaN below 10 venue games or 200 league
+    games. Point-in-time via searchsorted (games on the date itself excluded).
+    Returns lookup(venue_id, date64) -> float."""
+    g = games[(games["scheduled_innings"].fillna(9) != 7)
+              & games["home_score"].notna()].sort_values(
+        ["game_date", "first_pitch_utc", "game_pk"])
+    totals = (g["home_score"] + g["away_score"]).astype(float)
+    daily = pd.DataFrame({"d": g["game_date"].to_numpy(), "t": totals.to_numpy()}) \
+        .groupby("d")["t"].agg(["sum", "count"])
+    ld = daily.index.to_numpy()
+    csum = np.concatenate([[0.0], daily["sum"].to_numpy().cumsum()])
+    ccnt = np.concatenate([[0.0], daily["count"].to_numpy().cumsum()])
+
+    vbook = {}
+    for venue_id, grp in g.groupby("venue_id", sort=False):
+        vbook[venue_id] = (grp["game_date"].to_numpy(),
+                           (grp["home_score"] + grp["away_score"]).to_numpy(float))
+
+    def lookup(venue_id, date64) -> float:
+        arr = vbook.get(venue_id)
+        if arr is None:
+            return np.nan
+        vd, vt = arr
+        cut = int(np.searchsorted(vd, date64, side="left"))
+        if cut < 10:
+            return np.nan
+        vmean = vt[max(0, cut - 40):cut].mean()
+        hi = int(np.searchsorted(ld, date64, side="left"))
+        lo = int(np.searchsorted(ld, date64 - np.timedelta64(365, "D"), side="left"))
+        n = ccnt[hi] - ccnt[lo]
+        if n < 200:
+            return np.nan
+        lmean = (csum[hi] - csum[lo]) / n
+        return float(vmean / lmean) if lmean else np.nan
+
+    return lookup
+
+
 def _team_date_lookup(team_games: pd.DataFrame):
     """(team_id, season, date) -> the same rolling stats, for UNPLAYED games."""
     book = {}
@@ -332,11 +424,13 @@ SIDE_COLS = TEAM_ROLL_COLS + [
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
     "SP_WOBA_AGAINST_L10", "SP_XWOBA_CON_AGAINST_L10", "SP_IP_PER_START_L10",
     "SP_DAYS_REST", "SP_THROWS_L",
+    "TRAVEL_KM", "TRAVEL_TZ_DELTA",  # E8e, flag-gated 'travel'
 ] + LINEUP_COLS
 DIFF_COLS = [
     "RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
     "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10", "SP_WOBA_AGAINST_L10",
+    "TRAVEL_KM", "TRAVEL_TZ_DELTA",
     "LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE", "LINEUP_HR_RATE",
     "LINEUP_XWOBA_CON", "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA",
     "LINEUP_N_REG_OUT", "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
@@ -510,6 +604,8 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
     lineup = _lineup_strength(max_date)
+    travel = _travel_lookup(games)
+    venue_env = _venue_env_lookup(games)
 
     probables = _load_simple("""
         SELECT game_pk, home_pitcher_id, away_pitcher_id
@@ -548,6 +644,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
                 * (0 if pd.isna(g.wind_speed_mph) else g.wind_speed_mph)
                 * (1 if roof.get(g.venue_id) == "Open" else 0)
             ),
+            "VENUE_ENV_L40": venue_env(g.venue_id, g.game_date.to_datetime64()),
             "TARGET_HOME_RUNS": g.home_score,
             "TARGET_AWAY_RUNS": g.away_score,
             "TARGET_MARGIN": g.home_score - g.away_score,
@@ -567,6 +664,8 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             side_vals = dict(team_roll.get((g.game_pk, team_id), {}))
             side_vals.update(bp(team_id, g.game_date.to_datetime64()))
             side_vals.update(lineup.get((g.game_pk, team_id), {}))
+            side_vals.update(travel(team_id, g.season,
+                                    g.game_date.to_datetime64(), g.venue_id))
             pid = prob[f"{side}_pitcher_id"] if prob is not None else None
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1
@@ -686,8 +785,9 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
 
     slate columns: game_pk, game_date, season, home_team_id, away_team_id,
     venue_id, day_night, game_number, home_probable_id, away_probable_id.
-    Weather is unknown pregame and left NaN (forecast integration is a queued
-    upgrade); everything else matches build_features() column-for-column.
+    TEMP_F/WIND_SPEED_MPH come from the E6b forecast dict when provided (NaN
+    otherwise); UMP_K_FACTOR and WIND_OUT_MPH stay NaN pregame. Everything
+    else matches build_features() column-for-column.
     """
     from features import team_rating
 
@@ -710,6 +810,8 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
     team_at = _team_date_lookup(team_games)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
+    travel = _travel_lookup(games)
+    venue_env = _venue_env_lookup(games)
     ratings, last_season = team_rating.current_state(asof_date)
     park = _load_simple("SELECT season, venue_id, pf_runs FROM park_factors") \
         .set_index(["season", "venue_id"])["pf_runs"]
@@ -747,6 +849,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             # unknown pregame; flag-gated columns kept for schema consistency
             "UMP_K_FACTOR": np.nan,
             "WIND_OUT_MPH": np.nan,
+            "VENUE_ENV_L40": venue_env(g.venue_id, game_date.to_datetime64()),
             "ELO_HOME": rh, "ELO_AWAY": ra,
             "ELO_DIFF": rh - ra, "ELO_P_HOME": p_home,
         }
@@ -756,6 +859,8 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             side_vals = team_at(team_id, g.season, game_date.to_datetime64())
             side_vals.update(bp(team_id, game_date.to_datetime64()))
             side_vals.update(lineup_vals.get((g.game_pk, team_id), {}))
+            side_vals.update(travel(team_id, g.season,
+                                    game_date.to_datetime64(), g.venue_id))
             pid = getattr(g, f"{side}_probable_id")
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1

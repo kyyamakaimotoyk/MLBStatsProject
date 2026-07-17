@@ -181,6 +181,10 @@ export type PitcherBoardRow = {
   opp_exp_h: number | null;
   opp_exp_k: number | null;
   opp_exp_hr: number | null;
+  // starter-scoped heads (B7): while the starter is in the game
+  sp_exp_k: number | null;
+  sp_exp_bb: number | null;
+  sp_exp_h: number | null;
 };
 
 export const getPitcherBoard = () => getJSON<PitcherBoardRow[]>("/api/public/pitchers");

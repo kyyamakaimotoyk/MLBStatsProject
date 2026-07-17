@@ -19,6 +19,7 @@ import {
   batterSkillCurve,
   confidenceCurve,
   confusion,
+  hrWatchCurve,
   marginMissHistogram,
   ResultRow,
   roc,
@@ -237,6 +238,46 @@ export function BatterSkillCurveChart({ days }: { days: BatterDay[] }) {
             formatter={(v) => [
               Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
               "Our calls vs the lazy rule",
+            ]}
+          />
+          <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
+          <Line type="linear" dataKey="edge" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartPanel>
+  );
+}
+
+export function HrWatchCurveChart({ days }: { days: BatterDay[] }) {
+  const data = hrWatchCurve(days);
+  if (data.length < 2) return null;
+  return (
+    <ChartPanel
+      title="Skill curve — the home-run watch"
+      sub={
+        "Each night the model names its five likeliest hitters to homer. Five random starters would homer at the night's base rate — the dashed line. This counts homers by our five above that pace; skill is only what climbs above zero."
+      }
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
+          <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
+          <XAxis
+            dataKey="date"
+            tick={{ fill: TEXT, fontSize: 10 }}
+            stroke={GRID}
+            minTickGap={28}
+            label={xLabel("Date")}
+          />
+          <YAxis
+            tick={{ fill: TEXT, fontSize: 11 }}
+            stroke={GRID}
+            label={yLabel("Homers above chance")}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            formatter={(v) => [
+              Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }),
+              "Our five vs chance",
             ]}
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />

@@ -414,25 +414,38 @@ def results(days: int = Query(1400, le=2000)):
 
 @router.get("/api/public/batter-results")
 def batter_results():
-    """Per-day grading of the "gets a hit tonight?" calls, for the batter
-    skill curve: calls made, calls right, and how the lazy always-say-yes
-    rule did on the same batter-games (the honest benchmark — most starters
-    do get a hit, so coin-flip is the wrong opponent)."""
+    """Per-day grading of the hitter calls, for the batter skill curves.
+
+    Hit calls: calls made, calls right, and how the lazy always-say-yes rule
+    did on the same batter-games (the honest benchmark — most starters do get
+    a hit, so coin-flip is the wrong opponent).
+
+    HR watch: each day's top five hitters by our home-run chance, how many of
+    them homered, and the day's base rate (homers by ALL graded starters) —
+    the honest benchmark for a ranking claim is chance, not zero.
+    """
     df = pd.read_sql(text("""
-        SELECT x.game_date, count(*) AS n,
-               count(*) FILTER (WHERE (x.p_hit >= 0.5) = (x.h >= 1)) AS model_correct,
-               count(*) FILTER (WHERE x.h >= 1) AS always_yes_correct
+        SELECT y.game_date, count(*) AS n,
+               count(*) FILTER (WHERE (y.p_hit >= 0.5) = (y.h >= 1)) AS model_correct,
+               count(*) FILTER (WHERE y.h >= 1) AS always_yes_correct,
+               count(*) FILTER (WHERE y.hr >= 1) AS hr_base_hits,
+               count(*) FILTER (WHERE y.hr_rank <= 5) AS hr_watch_n,
+               count(*) FILTER (WHERE y.hr_rank <= 5 AND y.hr >= 1) AS hr_watch_hits
         FROM (
-            SELECT DISTINCT ON (bp.game_pk, bp.player_id)
-                   g.game_date::text AS game_date, bp.p_hit, bg.h
-            FROM batter_game_lines bg
-            JOIN games g ON g.game_pk = bg.game_pk AND g.is_final
-            JOIN batter_predictions bp
-              ON bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
-            WHERE bg.h IS NOT NULL AND bp.p_hit IS NOT NULL
-            ORDER BY bp.game_pk, bp.player_id,
-                     (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
-        ) x
+            SELECT x.*, ROW_NUMBER() OVER (PARTITION BY x.game_date
+                                           ORDER BY x.p_hr DESC NULLS LAST) AS hr_rank
+            FROM (
+                SELECT DISTINCT ON (bp.game_pk, bp.player_id)
+                       g.game_date::text AS game_date, bp.p_hit, bp.p_hr, bg.h, bg.hr
+                FROM batter_game_lines bg
+                JOIN games g ON g.game_pk = bg.game_pk AND g.is_final
+                JOIN batter_predictions bp
+                  ON bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
+                WHERE bg.h IS NOT NULL AND bp.p_hit IS NOT NULL
+                ORDER BY bp.game_pk, bp.player_id,
+                         (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+            ) x
+        ) y
         GROUP BY 1 ORDER BY 1
     """), get_engine())
     return _clean(df)
@@ -440,10 +453,11 @@ def batter_results():
 
 @router.get("/api/public/pitchers")
 def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
-    """Probable starters for a date (default today) with season-to-date form
-    and what our hitter model expects the opposing lineup to do in that game
-    (per-hitter calls summed — the whole game, not just the starter's
-    innings). Freshest probables win: the daily capture beats the backfill."""
+    """Probable starters for a date (default today) with season-to-date form,
+    the starter-scoped model heads (B7: expected K/BB/hits allowed while the
+    starter pitches, from pitcher_predictions), and what our hitter model
+    expects the opposing lineup to do over the whole game (per-hitter calls
+    summed). Freshest probables win: the daily capture beats the backfill."""
     engine = get_engine()
     board = pd.read_sql(text("""
         WITH probs AS (
@@ -507,9 +521,20 @@ def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"
         GROUP BY 1, 2
     """), engine, params={"pks": [int(i) for i in board["game_pk"].unique()]})
 
+    sp_heads = pd.read_sql(text("""
+        SELECT DISTINCT ON (pp.game_pk, pp.sp_id)
+               pp.game_pk, pp.sp_id AS pitcher_id,
+               pp.exp_k AS sp_exp_k, pp.exp_bb AS sp_exp_bb, pp.exp_h AS sp_exp_h
+        FROM pitcher_predictions pp
+        WHERE pp.game_pk = ANY(:pks)
+        ORDER BY pp.game_pk, pp.sp_id,
+                 (pp.model_version = 'daily_v1') DESC, pp.created_at DESC
+    """), engine, params={"pks": [int(i) for i in board["game_pk"].unique()]})
+
     out = (board.drop(columns=["season"])
            .merge(stats, on="pitcher_id", how="left")
-           .merge(vs, on=["game_pk", "pitcher_id"], how="left"))
+           .merge(vs, on=["game_pk", "pitcher_id"], how="left")
+           .merge(sp_heads, on=["game_pk", "pitcher_id"], how="left"))
     return _clean(out)
 
 

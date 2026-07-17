@@ -27,6 +27,8 @@ FEATURE_FLAGS: dict[str, bool] = {
                         # (margin MAE p=.020, AUC p=.009 vs baseline)
     "lineup_platoon": False,  # E5c: vs-hand lineup rates against the probable SP
     "arsenal_cross": False,   # B4: per-pitch-class quality x pitcher mix (parked)
+    "travel": False,     # E8e: travel burden since last game (distance, TZ shift)
+    "venue_env": False,  # E8f: rolling venue scoring environment
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
@@ -38,7 +40,48 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
                        "DIFF_LINEUP_VS_HAND", "HOME_LINEUP_SAME_HAND_SHARE",
                        "AWAY_LINEUP_SAME_HAND_SHARE", "DIFF_LINEUP_SAME_HAND_SHARE"),
     "arsenal_cross": ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_"),
+    "travel": ("HOME_TRAVEL_", "AWAY_TRAVEL_", "DIFF_TRAVEL_"),
+    "venue_env": ("VENUE_",),
 }
+
+# Feature families for the drop-one ablation profiles (E8a). Profile
+# "no_<family>" removes every column the family claims; family definitions
+# mirror the builder blocks in features/team_features.py. HOME_/AWAY_/DIFF_
+# columns are matched on their side-stripped base name, game-level columns on
+# their full name.
+_FORM_BASES = {"RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
+               "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30",
+               "N_PRIOR_GAMES", "REST_DAYS", "GAME_NUM"}
+FAMILIES = ("form", "sp", "bullpen", "lineup", "elo", "park", "weather",
+            "context", "travel")
+
+
+def _family(col: str) -> str:
+    base = col
+    for side in ("HOME_", "AWAY_", "DIFF_"):
+        if col.startswith(side):
+            base = col[len(side):]
+            break
+    if base in _FORM_BASES:
+        return "form"
+    if base.startswith("SP_"):
+        return "sp"
+    if base.startswith("BP_"):
+        return "bullpen"
+    if base.startswith("LINEUP_"):
+        return "lineup"
+    if base.startswith("TRAVEL_"):
+        return "travel"
+    if col.startswith("ELO_"):
+        return "elo"
+    if col.startswith(("PARK_", "VENUE_")):
+        return "park"
+    if col in ("TEMP_F", "WIND_SPEED_MPH", "IS_OPEN_AIR") or \
+            col.startswith(("WIND_OUT", "UMP_")):
+        return "weather"
+    if col in ("IS_NIGHT", "IS_DOUBLEHEADER_G2"):
+        return "context"
+    return "other"
 
 TARGETS = ("team_runs", "margin", "total", "batter_pa")
 
@@ -52,8 +95,10 @@ def select_features(columns: list[str], target: str, profile: str = "full",
     appear here — they are benchmark-only by schema and by convention.
 
     profile 'slim' (experiment E4) keeps only the Elo block, the starting-
-    pitcher blocks, and the park factor. enable_flags force-enables named
-    FEATURE_FLAGS for experiment runs without editing this file.
+    pitcher blocks, and the park factor. profile 'no_<family>' (experiment E8a)
+    drops one family from FAMILIES for drop-one ablations. enable_flags
+    force-enables named FEATURE_FLAGS for experiment runs without editing
+    this file.
     """
     if target not in TARGETS:
         raise ValueError(f"Unknown target {target!r}; expected one of {TARGETS}")
@@ -67,6 +112,11 @@ def select_features(columns: list[str], target: str, profile: str = "full",
         feats = [c for c in feats
                  if c.startswith("ELO_") or "_SP_" in c or "_LINEUP_" in c
                  or c == "PARK_PF_RUNS"]
+    elif profile.startswith("no_"):
+        fam = profile[3:]
+        if fam not in FAMILIES:
+            raise ValueError(f"unknown profile {profile!r}")
+        feats = [c for c in feats if _family(c) != fam]
     elif profile != "full":
         raise ValueError(f"unknown profile {profile!r}")
     return sorted(feats)

@@ -349,3 +349,124 @@ vs 0.6749, p<.0001).
 hyperparams; registry row logged as usual. Also backfilled 2026 closing
 lines from ESPN the same day (1,444/1,444 final games covered), so the
 vs-market record now includes the current season.
+
+---
+
+## E8 — 2026-07-17 — systematic feature-family loop: nothing ships, the map redrawn
+
+Full write-up (method, tables, per-experiment detail):
+docs/modeling_deep-dive_2026-07-17.md. Baselines lgbm_runs+8s / elo+8s on
+v20260716_083741, 8,713 paired games, validation.ablation throughout.
+
+**E8a — drop-one family matrix** (new no_<family> profiles in
+core/features.py, still the single source of truth). Picks/margin/AUC are
+carried by SP + Elo ALONE (dropping either: acc -0.8/-0.9pp McNemar p=.02,
+AUC p<=.003); totals are carried by weather (+.0166 total MAE when dropped,
+p<.0001), park (p=.002), lineup (p=.019), context (p=.016). Bullpen is inert
+on all four metrics. Form DILUTES probability ranking (drop -> AUC +.0037
+p=.022 at seed 0) but the gain flips sign at seed 2 — not a robust win, no
+default change. Slim rerun confirms E4 at 8 seasons (picks parity, totals
+p=.004 worse).
+
+**E8b — umpire+wind retest at 8 seasons. REJECTED (4th time).** Total MAE
+3.5303 vs 3.5331, p=.23. The effect did not grow with data. Retest retired
+until a pregame serve path exists (ump capture + E6c park orientation).
+
+**E8c — Elo/LGBM p-blend (offline). PARKED.** Best alpha=.3: pooled acc
+.5638 vs .5612 (McNemar p=.57). Diagnostic: when the two models split
+(~20% of games) lgbm accuracy is .5074 — coin flip; agreement games .5792.
+
+**E8d — first MLB hyperparameter sweep. INCUMBENT WINS.** 15 configs,
+selection on 2023-2025 only (2026 untouched): incumbent .5654, next .5634;
+deeper trees monotonically worse (63 leaves .5565). Conservative NBA-derived
+params are validated; hyperparams are ruled out as the market-gap source.
+
+**E8e/E8f — travel + venue scoring drift. REJECTED (null).** New flag-gated
+columns (TRAVEL_KM, TRAVEL_TZ_DELTA per side + DIFF; VENUE_ENV_L40), snapshot
+v20260717_023946 (121 cols, leakage PASS). Travel: all four metrics p>=.29.
+Venue env: totals p=.64. Flags stay off; columns remain in the builder.
+
+**E8g — market-gap decomposition (diagnostic).** The gap to the closing line
+is a first-half phenomenon: Mar -5.6pp, Apr -1.8pp, Jun -3.3pp, then Aug
++2.1pp / Sep +0.1pp — the model beats the market from August on. 2026's
+-2.0pp is entirely Mar-Jun (Jul 2026 already +1.2pp). Disagreement picks are
+.4785 pooled and no confidence bucket rescues them.
+
+**Decision.** No team-model change ships. The queue reorders: E9
+early-season priors/shrinkage (the one first-half lever with direct
+evidence), then serve-path acquisitions (pregame umpire, E6c park
+orientation, game-day roof status). feature_set_current stays
+v20260716_083741.
+
+---
+
+## B6 — 2026-07-17 — B3 isotonic on p_hit: CONFIRMED, SHIPS (p_hr stays raw)
+
+**Setup.** walkforward_batter --seasons 2023 2024 2025 2026 --no-preds,
+seeds 0/1/2 (8-season data, 156,837 pooled batter-games; calibrator fit on
+prior test seasons, 2023 uncalibrated either way).
+
+**Result.** p_hit Brier .23380/.23385/.23383 vs raw .23408/.23410/.23406 —
+p<.0001 at every seed, magnitude stable (~-.00025), direction never flips.
+p_hr: p=.33/.17/.17 — never significant, exactly as in the 4-season rounds.
+
+**Decision.** SHIPS for p_hit only (never ship a calibrator without
+demonstrated benefit — p_hr stays raw). Production: orchestration/daily.py
+fits an IsotonicRegression at batter-bundle-train time on stored
+out-of-sample predictions joined to outcomes (>=10k rows required; the
+bundle carries it as cal_hit) and applies it to the p_hit head. Vintage
+note: stored walk-forward preds are pre-B2-blend while daily p_hit is
+post-blend — the blend moves p_hit only via the 7-class rescale, second-order
+vs the calibration signal. Batter bundle invalidated to force retrain.
+
+---
+
+## E8h — 2026-07-17 — model-family suite (RF / PyTorch NN / HGB / ridge / XGB): LightGBM stays
+
+**Setup.** Four new families in modeling/team_models.py, same runs-two-head
+structure and sigma squash (rf_runs: 500-tree RandomForest, native NaN;
+hgb_runs: sklearn HistGradientBoosting, Poisson; ridge_runs: impute+scale+
+Ridge linear floor; nn_runs: PyTorch MLP with the NBA architecture 128-64-32
+BatchNorm+Dropout .3, median-impute+standardize — torch installed in the
+venv only, deliberately NOT in requirements.txt). Plus xgb_runs rerun.
+Walk-forward on v20260716_083741, ablation vs lgbm_runs+8s (8,713 games).
+The plan's "no NNs until trees plateau" gate was met by E8a-f.
+
+**Result.** xgb: parity everywhere (E0 replicated). HGB: significantly worse
+(acc p=.043, totals p=.009). Ridge: strikingly close (margin MAE 3.4731 vs
+3.4778, acc -0.5pp n.s.) — most pick signal is linear in Elo+SP. NN:
+REJECTED decisively — worse on ALL four metrics (acc .5431 vs .5612 McNemar
+p=.0014; margin MAE 3.5884 p<.0001; AUC -.025 p<.0001; totals +.14
+p<.0001) — the NBA "NNs never beat trees on tabular data" lesson replicates
+on MLB. RF: the one positive — pick parity with margin MAE 3.4712 vs 3.4778
+(p=.043) and AUC +.0035 (p=.088).
+
+**Decision.** LightGBM remains the workhorse; nothing ships. Queued E10:
+lgbm+RF margin ensemble (multi-seed gated). Do not revisit NNs without a
+structurally different design.
+
+---
+
+## B7 — 2026-07-17 — starter-scoped K/BB/H heads by aggregation: SHIPS
+
+**Hypothesis.** The per-PA model already contains a pitcher product:
+predicted starter K = w_sp x sum over the opposing nine of exp_pa x
+P(K | vs this SP), with w_sp = the starter's own expected PA share
+(clip(SP_IP_PER_START_L10/9, .40, .85)). Ditto BB and hits allowed.
+
+**Result (pooled 2023-2026, 17,374 starter-games where the probable started;
+seeds 0/1/2 identical to 3 decimals, all paired-t).**
+- K MAE: workload-scaled model **1.812** vs league-w model 1.856 (p<.0001)
+  vs SP-marginal baseline 1.888 (p<.0001) vs w-scaled whole-game board sum
+  1.876 (p<.0001).
+- BB MAE: **1.025** (wsp) vs 1.032 (p<.0001) vs marginal 1.036 (p=.015-.026).
+- H allowed MAE: **1.769** (wsp) vs 1.792 (p<.0001) vs marginal 1.819 (p<.0001).
+Note the contrast with B1 (rejected): per-SP workload hurts the BATTER
+mixing weight but is decisively right for PITCHER-level counts.
+
+**Decision.** SHIPS. migrations/0008 adds pitcher_predictions; the daily
+pipeline aggregates and writes starter heads per (game, sp) when the full
+nine is predicted; /api/public/pitchers serves sp_exp_k/sp_exp_bb/sp_exp_h
+(daily_v1-preferred); the pitchers board now leads with starter-scoped
+K/BB/H instead of unlabeled whole-game lineup sums. Evaluation lives in
+walkforward_batter's pooled B7 verdicts.

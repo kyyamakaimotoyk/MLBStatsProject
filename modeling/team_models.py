@@ -18,7 +18,11 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor
 from scipy.stats import norm
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 from xgboost import XGBRegressor
 
 LGBM_PARAMS = dict(
@@ -30,6 +34,81 @@ XGB_PARAMS = dict(
     n_estimators=400, learning_rate=0.03, max_depth=4, min_child_weight=10,
     subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0, n_jobs=-1, verbosity=0,
 )
+# E8h model-family suite (the hoopmodel pattern: trees vs RF vs NN vs linear,
+# walk-forward decides). Conservative by the same E1 lesson as the GBMs.
+RF_PARAMS = dict(n_estimators=500, min_samples_leaf=15, max_features=0.5, n_jobs=-1)
+HGB_PARAMS = dict(max_iter=400, learning_rate=0.03, max_leaf_nodes=15,
+                  min_samples_leaf=50, l2_regularization=1.0)
+RIDGE_PARAMS = dict(alpha=10.0)
+NN_PARAMS = dict(hidden=(128, 64, 32), dropout=0.3, lr=1e-3, weight_decay=1e-4,
+                 epochs=80, batch_size=256)
+FAMILY_PARAMS = {"lgbm": LGBM_PARAMS, "xgb": XGB_PARAMS, "rf": RF_PARAMS,
+                 "hgb": HGB_PARAMS, "ridge": RIDGE_PARAMS, "nn": NN_PARAMS}
+
+
+class _TorchRegressor:
+    """PyTorch MLP head with the NBA project's architecture (128-64-32,
+    BatchNorm + ReLU + Dropout), wrapped in the sklearn fit/predict shape so
+    RunsModel can use it as a drop-in head. Median-imputes and standardizes
+    internally (trees tolerate NaN; the net does not). torch is imported
+    lazily — it is an experiment-only dependency, deliberately NOT in
+    requirements.txt so the Docker images never inherit it."""
+
+    def __init__(self, seed: int, hidden=(128, 64, 32), dropout=0.3, lr=1e-3,
+                 weight_decay=1e-4, epochs=80, batch_size=256):
+        self.seed = seed
+        self.hidden, self.dropout = hidden, dropout
+        self.lr, self.weight_decay = lr, weight_decay
+        self.epochs, self.batch_size = epochs, batch_size
+
+    def _prep(self, X, fit: bool = False) -> np.ndarray:
+        X = np.asarray(X, dtype=np.float64)
+        if fit:
+            self.med = np.nan_to_num(np.nanmedian(X, axis=0))
+            Xi = np.where(np.isnan(X), self.med, X)
+            self.mu = Xi.mean(axis=0)
+            self.sd = Xi.std(axis=0)
+            self.sd[self.sd == 0] = 1.0
+        else:
+            Xi = np.where(np.isnan(X), self.med, X)
+        return ((Xi - self.mu) / self.sd).astype(np.float32)
+
+    def fit(self, X, y) -> None:
+        import torch
+        from torch import nn
+        Xs = self._prep(X, fit=True)
+        yv = np.asarray(y, dtype=np.float32).reshape(-1, 1)
+        torch.manual_seed(self.seed)
+        layers, d = [], Xs.shape[1]
+        for h in self.hidden:
+            layers += [nn.Linear(d, h), nn.BatchNorm1d(h), nn.ReLU(),
+                       nn.Dropout(self.dropout)]
+            d = h
+        layers.append(nn.Linear(d, 1))
+        self.net = nn.Sequential(*layers)
+        opt = torch.optim.Adam(self.net.parameters(), lr=self.lr,
+                               weight_decay=self.weight_decay)
+        loss_fn = nn.MSELoss()
+        ds = torch.utils.data.TensorDataset(torch.from_numpy(Xs), torch.from_numpy(yv))
+        gen = torch.Generator().manual_seed(self.seed)
+        # drop_last: a trailing batch of size 1 breaks BatchNorm in train mode
+        loader = torch.utils.data.DataLoader(ds, batch_size=self.batch_size,
+                                             shuffle=True, generator=gen,
+                                             drop_last=len(ds) > self.batch_size)
+        self.net.train()
+        for _ in range(self.epochs):
+            for xb, yb in loader:
+                opt.zero_grad()
+                loss = loss_fn(self.net(xb), yb)
+                loss.backward()
+                opt.step()
+
+    def predict(self, X) -> np.ndarray:
+        import torch
+        Xs = self._prep(X)
+        self.net.eval()
+        with torch.no_grad():
+            return self.net(torch.from_numpy(Xs)).numpy().ravel()
 
 
 def _regressor(family: str, kind: str, seed: int):
@@ -40,6 +119,17 @@ def _regressor(family: str, kind: str, seed: int):
     if family == "xgb":
         return XGBRegressor(objective="count:poisson" if kind == "count" else "reg:squarederror",
                             random_state=seed, **XGB_PARAMS)
+    if family == "rf":  # no Poisson objective; L2 on counts (sklearn handles NaN)
+        return RandomForestRegressor(random_state=seed, **RF_PARAMS)
+    if family == "hgb":
+        return HistGradientBoostingRegressor(
+            loss="poisson" if kind == "count" else "squared_error",
+            random_state=seed, **HGB_PARAMS)
+    if family == "ridge":  # linear floor; needs imputation + scaling
+        return make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
+                             Ridge(**RIDGE_PARAMS))
+    if family == "nn":
+        return _TorchRegressor(seed=seed, **NN_PARAMS)
     raise ValueError(f"unknown family {family!r}")
 
 
@@ -54,7 +144,7 @@ class RunsModel:
         self.family = family
         self.seed = seed
         self.hyperparams = {"family": family, "structure": "runs_two_head",
-                            **(LGBM_PARAMS if family == "lgbm" else XGB_PARAMS)}
+                            **FAMILY_PARAMS[family]}
 
     def fit(self, train: pd.DataFrame, feats: list[str]) -> None:
         X = train[feats]
@@ -212,6 +302,12 @@ MODEL_TYPES = {
     "lgbm_direct": lambda seed=0: DirectModel("lgbm", seed),
     "xgb_runs": lambda seed=0: RunsModel("xgb", seed),
     "xgb_direct": lambda seed=0: DirectModel("xgb", seed),
+    # E8h model-family suite (hoopmodel pattern): RF / sklearn HGB / torch MLP
+    # / ridge floor, same runs-two-head structure
+    "rf_runs": lambda seed=0: RunsModel("rf", seed),
+    "hgb_runs": lambda seed=0: RunsModel("hgb", seed),
+    "nn_runs": lambda seed=0: RunsModel("nn", seed),
+    "ridge_runs": lambda seed=0: RunsModel("ridge", seed),
     "elo": lambda seed=0: EloBaseline(seed),
     "const": lambda seed=0: ConstBaseline(seed),
 }

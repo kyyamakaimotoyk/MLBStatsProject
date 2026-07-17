@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
 import { getJSON } from "@/lib/api";
-import { marketComparison, ResultRow } from "@/lib/perf";
+import { BatterDay, marketComparison, ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import { sinceDate, WindowKey } from "@/lib/windows";
 import {
+  BatterSkillCurveChart,
   ConfidenceCurveChart,
   ConfusionMatrix,
   MarginMissChart,
@@ -20,12 +21,14 @@ export default function RecordPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [feed, setFeed] = useState<Feed | null>(null);
   const [rows, setRows] = useState<ResultRow[] | null>(null);
+  const [batterDays, setBatterDays] = useState<BatterDay[] | null>(null);
   const [win, setWin] = useState<WindowKey>("3m");
 
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
     getFeed(21).then(setFeed).catch(() => {});
     getJSON<ResultRow[]>("/api/public/results").then(setRows).catch(() => {});
+    getJSON<BatterDay[]>("/api/public/batter-results").then(setBatterDays).catch(() => {});
   }, []);
 
   const gradedGames = (feed?.days ?? [])
@@ -45,6 +48,8 @@ export default function RecordPage() {
       totalMiss.length
     : null;
   const market = marketComparison(view);
+  const batterView = (batterDays ?? []).filter((d) => d.game_date >= since);
+  const batterCalls = batterView.reduce((s, d) => s + d.n, 0);
 
   return (
     <div className="space-y-8">
@@ -148,6 +153,20 @@ export default function RecordPage() {
               head-to-head.
             </p>
           )}
+        </section>
+      )}
+
+      {batterView.length > 15 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">The hitter calls</h2>
+          <p className="text-sm text-zinc-500">
+            Every night the model answers &quot;gets a hit tonight?&quot; for each
+            starter in the lineup — {batterCalls.toLocaleString()} calls graded
+            in this window.
+          </p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <BatterSkillCurveChart days={batterView} />
+          </div>
         </section>
       )}
 

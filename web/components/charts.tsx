@@ -15,6 +15,8 @@ import {
   YAxis,
 } from "recharts";
 import {
+  BatterDay,
+  batterSkillCurve,
   confidenceCurve,
   confusion,
   marginMissHistogram,
@@ -198,6 +200,47 @@ export function TotalSkillCurveChart({ rows }: { rows: ResultRow[] }) {
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
           <Line type="linear" dataKey="model" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartPanel>
+  );
+}
+
+export function BatterSkillCurveChart({ days }: { days: BatterDay[] }) {
+  const data = batterSkillCurve(days);
+  if (data.length < 2) return null;
+  return (
+    <ChartPanel
+      title="Skill curve — the hit calls"
+      sub={
+        'The same running total for "gets a hit tonight?" — but most starters do get a hit, so the dashed line is the lazy rule that says yes for everyone, not a coin-flip. We count right calls above that rule\'s pace on the same nights; skill is only what climbs above zero.'
+      }
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
+          <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
+          <XAxis
+            dataKey="date"
+            tick={{ fill: TEXT, fontSize: 10 }}
+            stroke={GRID}
+            minTickGap={28}
+            label={xLabel("Date")}
+          />
+          <YAxis
+            tick={{ fill: TEXT, fontSize: 11 }}
+            stroke={GRID}
+            allowDecimals={false}
+            label={yLabel("Right calls above the lazy rule")}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            formatter={(v) => [
+              Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
+              "Our calls vs the lazy rule",
+            ]}
+          />
+          <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
+          <Line type="linear" dataKey="edge" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
         </LineChart>
       </ResponsiveContainer>
     </ChartPanel>

@@ -412,6 +412,32 @@ def results(days: int = Query(1400, le=2000)):
     return _clean(df)
 
 
+@router.get("/api/public/batter-results")
+def batter_results():
+    """Per-day grading of the "gets a hit tonight?" calls, for the batter
+    skill curve: calls made, calls right, and how the lazy always-say-yes
+    rule did on the same batter-games (the honest benchmark — most starters
+    do get a hit, so coin-flip is the wrong opponent)."""
+    df = pd.read_sql(text("""
+        SELECT x.game_date, count(*) AS n,
+               count(*) FILTER (WHERE (x.p_hit >= 0.5) = (x.h >= 1)) AS model_correct,
+               count(*) FILTER (WHERE x.h >= 1) AS always_yes_correct
+        FROM (
+            SELECT DISTINCT ON (bp.game_pk, bp.player_id)
+                   g.game_date::text AS game_date, bp.p_hit, bg.h
+            FROM batter_game_lines bg
+            JOIN games g ON g.game_pk = bg.game_pk AND g.is_final
+            JOIN batter_predictions bp
+              ON bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
+            WHERE bg.h IS NOT NULL AND bp.p_hit IS NOT NULL
+            ORDER BY bp.game_pk, bp.player_id,
+                     (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
+        ) x
+        GROUP BY 1 ORDER BY 1
+    """), get_engine())
+    return _clean(df)
+
+
 @router.get("/api/public/pitchers")
 def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
     """Probable starters for a date (default today) with season-to-date form

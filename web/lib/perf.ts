@@ -71,6 +71,30 @@ export function skillCurve(rows: ResultRow[]) {
   return thinSeries(out);
 }
 
+// The same running total for the "gets a hit tonight?" calls. Coin-flip is
+// the wrong opponent here (most starters get a hit most nights), so the
+// same-footing benchmark is the lazy rule that says yes for everyone.
+export type BatterDay = {
+  game_date: string;
+  n: number;
+  model_correct: number;
+  always_yes_correct: number;
+};
+
+export function batterSkillCurve(days: BatterDay[]) {
+  // Plotted as the margin over the lazy rule (it IS the zero line): both
+  // series beat coin-flip by thousands of calls, so drawing them raw hides
+  // the only gap that means anything.
+  let edge = 0;
+  const out = [...days]
+    .sort((a, b) => a.game_date.localeCompare(b.game_date))
+    .map((d) => {
+      edge += d.model_correct - d.always_yes_correct;
+      return { date: d.game_date, edge };
+    });
+  return thinSeries(out);
+}
+
 // The same running total for the over/under: our side of the market's total
 // line, right calls minus half the games. Pushes (final total exactly on the
 // line) grade nobody, and a predicted total exactly on the line is no call.

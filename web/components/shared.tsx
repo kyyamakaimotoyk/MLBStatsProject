@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { FeedGame } from "@/lib/public-api";
 import { copy, finalScore, pctLabel, scoreCall } from "@/lib/copy";
 import { WINDOW_OPTIONS, WindowKey } from "@/lib/windows";
@@ -126,21 +127,74 @@ export function PicksTable({ games }: { games: FeedGame[] }) {
 
 export function PicksStrip({ games }: { games: FeedGame[] }) {
   const graded = games.filter((g) => g.correct != null);
+  const [selected, setSelected] = useState<FeedGame | null>(null);
   return (
-    <div className="flex flex-wrap gap-1">
-      {graded.map((g) => (
-        <span
-          key={g.game_pk}
-          title={`${g.away} @ ${g.home}: picked ${g.pick} (${pctLabel(g.pick_chance)})`}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold"
-          style={{
-            backgroundColor: g.correct ? "var(--good-bg)" : "var(--bad-bg)",
-            color: g.correct ? "var(--good-text)" : "var(--bad-text)",
-          }}
-        >
-          {g.correct ? "✓" : "✗"}
-        </span>
-      ))}
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1">
+        {graded.map((g) => (
+          <button
+            key={g.game_pk}
+            type="button"
+            onClick={() => setSelected(selected?.game_pk === g.game_pk ? null : g)}
+            title={`${g.away} @ ${g.home}: picked ${g.pick} (${pctLabel(g.pick_chance)})`}
+            aria-label={`${g.game_date}: ${g.away} at ${g.home}, ${
+              g.correct ? "correct" : "missed"
+            } — tap for the call and the final score`}
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold"
+            style={{
+              backgroundColor: g.correct ? "var(--good-bg)" : "var(--bad-bg)",
+              color: g.correct ? "var(--good-text)" : "var(--bad-text)",
+              outline:
+                selected?.game_pk === g.game_pk
+                  ? "2px solid var(--accent-mark)"
+                  : undefined,
+              outlineOffset: 1,
+            }}
+          >
+            {g.correct ? "✓" : "✗"}
+          </button>
+        ))}
+      </div>
+      {selected && (
+        <div className="rounded border border-zinc-200 bg-white px-4 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold">
+              {selected.away} @ {selected.home}
+              <span className="ml-2 font-normal text-zinc-500">{selected.game_date}</span>
+            </span>
+            <span
+              className="font-bold"
+              style={{
+                color: selected.correct ? "var(--good-text)" : "var(--bad-text)",
+              }}
+            >
+              {selected.correct ? "✓ got it" : "✗ missed"}
+            </span>
+          </div>
+          <div className="mt-1 text-zinc-600 dark:text-zinc-300">
+            Picked{" "}
+            <span className="font-semibold" style={{ color: "var(--accent-text)" }}>
+              {selected.pick}
+            </span>{" "}
+            to win ({pctLabel(selected.pick_chance)})
+          </div>
+          <div className="text-zinc-600 dark:text-zinc-300">
+            Score call{" "}
+            <span className="font-semibold">
+              {scoreCall(
+                selected.home,
+                selected.away,
+                selected.pred_home_runs,
+                selected.pred_away_runs,
+              )}
+            </span>
+            {" · "}Final{" "}
+            <span className="font-semibold">
+              {finalScore(selected.home, selected.away, selected.home_score, selected.away_score)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

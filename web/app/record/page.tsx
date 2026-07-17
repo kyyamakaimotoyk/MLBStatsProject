@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
 import { getJSON } from "@/lib/api";
-import { ResultRow } from "@/lib/perf";
+import { marketComparison, ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import { sinceDate, WindowKey } from "@/lib/windows";
@@ -12,6 +12,8 @@ import {
   MarginMissChart,
   RocChart,
   SkillCurveChart,
+  TotalSkillCurveChart,
+  VsMarketChart,
 } from "@/components/charts";
 
 export default function RecordPage() {
@@ -42,6 +44,7 @@ export default function RecordPage() {
     ? totalMiss.reduce((s, r) => s + Math.abs((r.pred_total ?? 0) - (r.total ?? 0)), 0) /
       totalMiss.length
     : null;
+  const market = marketComparison(view);
 
   return (
     <div className="space-y-8">
@@ -93,7 +96,8 @@ export default function RecordPage() {
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">The last three weeks, pick by pick</h2>
         <p className="text-sm text-zinc-500">
-          One square per game, oldest to newest. Hover for the pick.
+          One square per game, oldest to newest. Tap any square for the call
+          and the final score.
         </p>
         {feed ? <PicksStrip games={gradedGames} /> : <p className="text-sm text-zinc-500">Loading…</p>}
         {gradedGames.length > 0 && (
@@ -113,6 +117,64 @@ export default function RecordPage() {
             <MarginMissChart rows={view} />
             <ConfusionMatrix rows={view} />
           </div>
+        </section>
+      )}
+
+      {rows && view.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">The model vs the market</h2>
+          <p className="text-sm text-zinc-500">
+            The betting market&apos;s pregame line is the strongest public
+            prediction there is, so we grade ourselves against it on every game
+            where we have one. Lines are a benchmark only — the model never
+            sees them.
+          </p>
+          {market && market.n >= 30 ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <ProofChip
+                  metric={`${pctLabel(market.modelAcc)} vs ${pctLabel(market.marketAcc)}`}
+                  line1="winners called — us vs the market favorite"
+                  line2={`same ${market.n.toLocaleString()} games, this window`}
+                />
+                <ProofChip
+                  metric={
+                    market.modelTotalMiss != null && market.marketTotalMiss != null
+                      ? `±${market.modelTotalMiss.toFixed(1)} vs ±${market.marketTotalMiss.toFixed(1)}`
+                      : "—"
+                  }
+                  line1="total-runs miss — us vs the market's line"
+                  line2={
+                    market.totalsN
+                      ? `${market.totalsN.toLocaleString()} games with a total line`
+                      : undefined
+                  }
+                />
+                <ProofChip
+                  metric={`${market.disagreeWins.toLocaleString()}–${(
+                    market.disagreeN - market.disagreeWins
+                  ).toLocaleString()}`}
+                  line1="when we take the other side"
+                  line2={`our record in the ${market.disagreeN.toLocaleString()} games where we disagree with the market favorite`}
+                />
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <VsMarketChart rows={view} />
+                <TotalSkillCurveChart rows={view} />
+              </div>
+              <p className="text-xs text-zinc-400">
+                Pregame lines cover {market.n.toLocaleString()} of{" "}
+                {view.length.toLocaleString()} graded games in this window.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-zinc-500">
+              Only {market?.n ?? 0} game{(market?.n ?? 0) === 1 ? " has" : "s have"} a
+              stored pregame line in this window — we archive lines for
+              2023–25 and capture them daily going forward. Pick a longer
+              window to see the head-to-head.
+            </p>
+          )}
         </section>
       )}
       {view.length > 0 && view.length <= 100 && (

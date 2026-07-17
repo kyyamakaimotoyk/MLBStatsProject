@@ -14,7 +14,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { confusion, marginMissHistogram, ResultRow, roc, skillCurve } from "@/lib/perf";
+import {
+  confusion,
+  marginMissHistogram,
+  monthlyVsMarket,
+  ResultRow,
+  roc,
+  skillCurve,
+  totalSkillCurve,
+} from "@/lib/perf";
 
 const S1 = "var(--series-1)";
 const S2 = "var(--series-2)";
@@ -104,6 +112,104 @@ export function SkillCurveChart({ rows }: { rows: ResultRow[] }) {
           <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
           <Line type="linear" dataKey="accuracy" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
           <Line type="linear" dataKey="coverage" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartPanel>
+  );
+}
+
+export function TotalSkillCurveChart({ rows }: { rows: ResultRow[] }) {
+  const data = totalSkillCurve(rows);
+  if (data.length < 2) return null;
+  return (
+    <ChartPanel
+      title="Calling the total — over or under"
+      sub="When our predicted total sits at least this far from the market's line, how often is our side of the line right — and how many games is that?"
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
+          <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
+          <XAxis
+            dataKey="edge"
+            tick={{ fill: TEXT, fontSize: 11 }}
+            tickFormatter={(v) => `${v}+`}
+            stroke={GRID}
+            label={xLabel("Minimum gap between our total and the line (runs)")}
+          />
+          <YAxis
+            tick={{ fill: TEXT, fontSize: 11 }}
+            unit="%"
+            stroke={GRID}
+            domain={[0, 100]}
+            label={yLabel("Percent of games")}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            formatter={(v, name) => [
+              `${Number(v).toFixed(1)}%`,
+              String(name) === "accuracy" ? "Right side of the line" : "Share of games kept",
+            ]}
+            labelFormatter={(v) => `Our total at least ${v} runs off the line`}
+          />
+          <Legend
+            verticalAlign="top"
+            formatter={(v) => (v === "accuracy" ? "Right side of the line" : "Share of games kept")}
+            wrapperStyle={{ fontSize: 12 }}
+          />
+          <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
+          <Line type="linear" dataKey="accuracy" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="linear" dataKey="coverage" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartPanel>
+  );
+}
+
+export function VsMarketChart({ rows }: { rows: ResultRow[] }) {
+  const data = monthlyVsMarket(rows);
+  if (data.length < 2) return null;
+  const nByMonth = new Map(data.map((d) => [d.month, d.n]));
+  return (
+    <ChartPanel
+      title="Us vs the market, month by month"
+      sub="Winners called each month: our model against the betting market's pregame favorite, graded on the same games."
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
+          <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
+          <XAxis
+            dataKey="month"
+            tick={{ fill: TEXT, fontSize: 10 }}
+            stroke={GRID}
+            minTickGap={24}
+            label={xLabel("Month")}
+          />
+          <YAxis
+            tick={{ fill: TEXT, fontSize: 11 }}
+            unit="%"
+            stroke={GRID}
+            domain={[
+              (min: number) => Math.min(45, Math.floor(min) - 2),
+              (max: number) => Math.max(55, Math.ceil(max) + 2),
+            ]}
+            label={yLabel("Winners called")}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle}
+            formatter={(v, name) => [
+              `${Number(v).toFixed(1)}%`,
+              String(name) === "model" ? "Our model" : "Market favorite",
+            ]}
+            labelFormatter={(v) => `${v} · ${nByMonth.get(String(v)) ?? "?"} games`}
+          />
+          <Legend
+            verticalAlign="top"
+            formatter={(v) => (v === "model" ? "Our model" : "Market favorite")}
+            wrapperStyle={{ fontSize: 12 }}
+          />
+          <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
+          <Line type="linear" dataKey="model" stroke={S1} strokeWidth={2} dot={{ r: 3 }} />
+          <Line type="linear" dataKey="market" stroke={S2} strokeWidth={2} dot={{ r: 3 }} />
         </LineChart>
       </ResponsiveContainer>
     </ChartPanel>

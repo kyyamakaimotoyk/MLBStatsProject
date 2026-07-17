@@ -348,13 +348,21 @@ def team_trends(stat: str = Query("runs_scored"),
 @router.get("/api/public/results")
 def results(days: int = Query(1400, le=2000)):
     """Flat graded rows for client-side chart derivation (hoopmodel pattern:
-    the browser computes skill/ROC/confusion/error metrics from raw rows)."""
+    the browser computes skill/ROC/confusion/error metrics from raw rows).
+    Each row also carries the market's pregame view when we have it — the
+    no-vig closing win probability and the closing total line — so the
+    browser can grade the model against the betting market on the same
+    games. Lines are benchmarks only, never model inputs (hard rule)."""
     df = pd.read_sql(text("""
         SELECT g.game_date::text AS game_date, p.p_home, p.pred_margin,
                p.pred_total,
                g.home_score - g.away_score AS margin,
                g.home_score + g.away_score AS total,
-               (g.home_score > g.away_score) AS home_won
+               (g.home_score > g.away_score) AS home_won,
+               c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
+               c.total AS close_total,
+               op.ml_home AS open_ml_home, op.ml_away AS open_ml_away,
+               op.total AS open_total
         FROM games g
         JOIN LATERAL (
             SELECT * FROM model_predictions p
@@ -362,9 +370,45 @@ def results(days: int = Query(1400, le=2000)):
             ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
             LIMIT 1
         ) p ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = g.game_pk AND o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) c ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = g.game_pk AND NOT o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) op ON TRUE
         WHERE g.is_final AND g.game_date >= current_date - :days
         ORDER BY g.game_date
     """), get_engine(), params={"m": PRIMARY, "days": days})
+    if df.empty:
+        return []
+
+    # Corruption guard (same as scripts/benchmark_odds.py): pregame MLB win
+    # probabilities live in roughly [0.20, 0.85]. An implausible closing
+    # capture (in-game contamination) falls back to the opening line; games
+    # with neither plausible ship no market fields.
+    def no_vig_col(home_col: str, away_col: str) -> pd.Series:
+        ok = df[home_col].notna() & df[away_col].notna()
+        out = pd.Series(np.nan, index=df.index)
+        if ok.any():
+            out[ok] = _no_vig(df.loc[ok, home_col], df.loc[ok, away_col])
+        return out
+
+    p_close = no_vig_col("close_ml_home", "close_ml_away")
+    p_open = no_vig_col("open_ml_home", "open_ml_away")
+    close_ok = p_close.between(0.20, 0.85)
+    open_ok = p_open.between(0.20, 0.85)
+    df["market_p_home"] = np.where(close_ok, p_close,
+                                   np.where(open_ok, p_open, np.nan))
+    df["market_total"] = np.where(close_ok, df["close_total"],
+                                  np.where(open_ok, df["open_total"], np.nan))
+    df = df.drop(columns=["close_ml_home", "close_ml_away", "close_total",
+                          "open_ml_home", "open_ml_away", "open_total"])
     return _clean(df)
 
 

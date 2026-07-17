@@ -9,6 +9,11 @@ export type ResultRow = {
   margin: number;
   total: number | null;
   home_won: boolean;
+  // The betting market's pregame view, when a line was captured: no-vig
+  // closing win probability and the closing total line (benchmarks only,
+  // never model inputs).
+  market_p_home: number | null;
+  market_total: number | null;
 };
 
 export function skillCurve(rows: ResultRow[]) {
@@ -26,6 +31,81 @@ export function skillCurve(rows: ResultRow[]) {
     });
   }
   return out;
+}
+
+// Over/under skill curve: grade the model's side of the market's total line,
+// counting only games where the model's total is at least `edge` runs off the
+// line. Pushes (final total exactly on the line) grade nobody and are dropped.
+export function totalSkillCurve(rows: ResultRow[]) {
+  const graded = rows.filter(
+    (r) =>
+      r.pred_total != null &&
+      r.total != null &&
+      r.market_total != null &&
+      r.total !== r.market_total &&
+      r.pred_total !== r.market_total,
+  );
+  const out: { edge: number; accuracy: number; coverage: number }[] = [];
+  for (let e = 0; e <= 3; e += 0.25) {
+    const kept = graded.filter((r) => Math.abs(r.pred_total! - r.market_total!) >= e);
+    if (kept.length < 30) break;
+    const correct = kept.filter(
+      (r) => (r.pred_total! > r.market_total!) === (r.total! > r.market_total!),
+    ).length;
+    out.push({
+      edge: e,
+      accuracy: (100 * correct) / kept.length,
+      coverage: (100 * kept.length) / graded.length,
+    });
+  }
+  return out;
+}
+
+// Head-to-head vs the market on the games where we have a pregame line:
+// winner accuracy for both, total-runs miss for both, and the record when
+// the model and the market favorite disagree.
+export function marketComparison(rows: ResultRow[]) {
+  const lined = rows.filter((r) => r.market_p_home != null);
+  if (lined.length === 0) return null;
+  const modelRight = (r: ResultRow) => (r.p_home >= 0.5) === r.home_won;
+  const marketRight = (r: ResultRow) => (r.market_p_home! >= 0.5) === r.home_won;
+  const disagree = lined.filter((r) => (r.p_home >= 0.5) !== (r.market_p_home! >= 0.5));
+  const totals = lined.filter(
+    (r) => r.pred_total != null && r.total != null && r.market_total != null,
+  );
+  const miss = (f: (r: ResultRow) => number) =>
+    totals.length ? totals.reduce((s, r) => s + f(r), 0) / totals.length : null;
+  return {
+    n: lined.length,
+    modelAcc: lined.filter(modelRight).length / lined.length,
+    marketAcc: lined.filter(marketRight).length / lined.length,
+    disagreeN: disagree.length,
+    disagreeWins: disagree.filter(modelRight).length,
+    modelTotalMiss: miss((r) => Math.abs(r.pred_total! - r.total!)),
+    marketTotalMiss: miss((r) => Math.abs(r.market_total! - r.total!)),
+    totalsN: totals.length,
+  };
+}
+
+// Month-by-month winners-called rate, model vs the market favorite, on the
+// same games. Months with too few lined games are dropped (noise).
+export function monthlyVsMarket(rows: ResultRow[]) {
+  const byMonth = new Map<string, ResultRow[]>();
+  for (const r of rows) {
+    if (r.market_p_home == null) continue;
+    const m = r.game_date.slice(0, 7);
+    byMonth.set(m, [...(byMonth.get(m) ?? []), r]);
+  }
+  return [...byMonth.entries()]
+    .filter(([, v]) => v.length >= 15)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, v]) => ({
+      month,
+      n: v.length,
+      model: (100 * v.filter((r) => (r.p_home >= 0.5) === r.home_won).length) / v.length,
+      market:
+        (100 * v.filter((r) => (r.market_p_home! >= 0.5) === r.home_won).length) / v.length,
+    }));
 }
 
 export function roc(rows: ResultRow[]) {

@@ -1,5 +1,7 @@
 // Shared time-window options for the Tonight and Record pages.
 
+import { today } from "@/lib/api";
+
 export type WindowKey = "1m" | "2m" | "3m" | "season" | "2seasons" | "3seasons";
 
 export const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
@@ -12,20 +14,22 @@ export const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
 ];
 
 // Seasons start late March; March 1 is a safe season boundary. Before March,
-// "this season" means the previous year's season.
+// "this season" means the previous year's season. Anchored to the site
+// clock (US Eastern via today()), not the viewer's timezone.
 export function sinceDate(key: WindowKey): string {
-  const now = new Date();
-  const seasonYear = now.getMonth() >= 2 ? now.getFullYear() : now.getFullYear() - 1;
-  const d = new Date(now);
+  const t = today();
+  const year = Number(t.slice(0, 4));
+  const seasonYear = Number(t.slice(5, 7)) >= 3 ? year : year - 1;
+  const d = new Date(`${t}T00:00:00Z`);
   switch (key) {
     case "1m":
-      d.setDate(d.getDate() - 30);
+      d.setUTCDate(d.getUTCDate() - 30);
       break;
     case "2m":
-      d.setDate(d.getDate() - 60);
+      d.setUTCDate(d.getUTCDate() - 60);
       break;
     case "3m":
-      d.setDate(d.getDate() - 90);
+      d.setUTCDate(d.getUTCDate() - 90);
       break;
     case "season":
       return `${seasonYear}-03-01`;
@@ -38,6 +42,7 @@ export function sinceDate(key: WindowKey): string {
 }
 
 export function daysBack(key: WindowKey): number {
-  const since = new Date(sinceDate(key));
-  return Math.ceil((Date.now() - since.getTime()) / 86400000);
+  const since = new Date(`${sinceDate(key)}T00:00:00Z`);
+  const now = new Date(`${today()}T00:00:00Z`);
+  return Math.ceil((now.getTime() - since.getTime()) / 86400000);
 }

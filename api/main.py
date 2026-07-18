@@ -33,7 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from api.public import router as public_router  # noqa: E402
+from api.public import ET_TODAY, router as public_router  # noqa: E402
 
 app.include_router(public_router)
 
@@ -114,17 +114,17 @@ def batters(date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
 @app.get("/api/performance")
 def performance(days: int = Query(30, le=365)):
     """Rolling accuracy/MAE per model against final scores."""
-    team = _df("""
+    team = _df(f"""
         SELECT p.model_type, p.model_version, count(*) AS n,
                avg(((p.pred_margin > 0) = (g.home_score > g.away_score))::int) AS win_acc,
                avg(abs(g.home_score - g.away_score - p.pred_margin)) AS margin_mae,
                avg(abs(g.home_score + g.away_score - p.pred_total)) AS total_mae
         FROM model_predictions p
         JOIN games g USING (game_pk)
-        WHERE g.is_final AND g.game_date >= current_date - :days
+        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
         GROUP BY 1, 2 ORDER BY 1, 2
     """, days=days)
-    batter = _df("""
+    batter = _df(f"""
         SELECT b.model_version, count(*) AS n,
                avg(power(b.p_hit - (bg.h >= 1)::int, 2)) AS brier_p_hit,
                avg(power(b.p_hr - (bg.hr >= 1)::int, 2)) AS brier_p_hr,
@@ -132,11 +132,11 @@ def performance(days: int = Query(30, le=365)):
         FROM batter_predictions b
         JOIN batter_game_lines bg USING (game_pk, player_id)
         JOIN games g ON g.game_pk = b.game_pk
-        WHERE g.is_final AND g.game_date >= current_date - :days
+        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
         GROUP BY 1
     """, days=days)
 
-    market_df = pd.read_sql(text("""
+    market_df = pd.read_sql(text(f"""
         SELECT p.model_type, p.model_version, p.pred_margin,
                o.ml_home, o.ml_away,
                g.home_score > g.away_score AS home_won
@@ -148,7 +148,7 @@ def performance(days: int = Query(30, le=365)):
               AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
             ORDER BY o.captured_at DESC LIMIT 1
         ) o ON TRUE
-        WHERE g.is_final AND g.game_date >= current_date - :days
+        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
     """), get_engine(), params={"days": days})
     market = []
     if not market_df.empty:
@@ -168,7 +168,7 @@ def performance(days: int = Query(30, le=365)):
 @app.get("/api/results")
 def results(days: int = Query(7, le=60)):
     """Recent finals with the lgbm_runs prediction alongside."""
-    return _df("""
+    return _df(f"""
         SELECT g.game_date::text AS game_date, ht.abbrev AS home, at.abbrev AS away,
                g.home_score, g.away_score, p.p_home, p.pred_margin, p.pred_total,
                p.model_version
@@ -177,6 +177,6 @@ def results(days: int = Query(7, le=60)):
         JOIN teams at ON at.team_id = g.away_team_id
         LEFT JOIN model_predictions p
           ON p.game_pk = g.game_pk AND p.model_type = 'lgbm_runs'
-        WHERE g.is_final AND g.game_date >= current_date - :days
+        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
         ORDER BY g.game_date DESC, g.game_pk
     """, days=days)

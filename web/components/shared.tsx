@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { FeedGame } from "@/lib/public-api";
-import { copy, finalScore, pctLabel, scoreCall } from "@/lib/copy";
+import { copy, finalScore, marketCall, pctLabel, scoreCall } from "@/lib/copy";
 import { WINDOW_OPTIONS, WindowKey } from "@/lib/windows";
 
 export function WindowSelect({
@@ -70,6 +70,8 @@ export function PicksTable({ games }: { games: FeedGame[] }) {
             <th className="px-3 py-2 text-right">{copy.table.winChance}</th>
             <th className="px-3 py-2 text-right">{copy.table.scoreCall}</th>
             <th className="px-3 py-2 text-right">{copy.table.totalRuns}</th>
+            <th className="px-3 py-2 text-right">{copy.table.marketFavorite}</th>
+            <th className="px-3 py-2 text-right">{copy.table.marketTotal}</th>
             <th className="px-3 py-2 text-right">{copy.table.final}</th>
             <th className="px-3 py-2 text-right">{copy.table.result}</th>
           </tr>
@@ -108,6 +110,12 @@ export function PicksTable({ games }: { games: FeedGame[] }) {
               </td>
               <td className="px-3 py-2 text-right">
                 {g.pred_total != null ? g.pred_total.toFixed(1) : "—"}
+              </td>
+              <td className="px-3 py-2 text-right text-zinc-500">
+                {marketCall(g.home, g.away, g.market_p_home)}
+              </td>
+              <td className="px-3 py-2 text-right text-zinc-500">
+                {g.market_total != null ? g.market_total.toFixed(1) : "—"}
               </td>
               <td className="px-3 py-2 text-right text-zinc-500">
                 {g.is_final

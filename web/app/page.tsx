@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
-import { getJSON } from "@/lib/api";
+import { getJSON, today } from "@/lib/api";
 import { ResultRow } from "@/lib/perf";
 import { copy, pctLabel } from "@/lib/copy";
 import { PicksTable, ProofChip, WindowSelect } from "@/components/shared";
@@ -29,7 +29,7 @@ export default function HomePage() {
       .catch((e) => setError(String(e)));
   }, [win]);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = today(); // site clock: US Eastern, not the viewer's timezone
   const tonight = feed?.days.find((d) => d.date === todayStr);
   const past = (feed?.days ?? []).filter((d) => d.date !== todayStr);
 
@@ -79,8 +79,11 @@ export default function HomePage() {
 
       <section id="tonight" className="space-y-3">
         <h2 className="text-lg font-semibold">
-          {tonight ? `Predictions for ${tonight.date}` : "No games tonight"}
+          {tonight ? `Predictions for ${tonight.date}` : copy.site.noTonight}
         </h2>
+        {feed && !tonight && (
+          <p className="text-sm text-zinc-500">{copy.site.noTonightSub}</p>
+        )}
         {error && <p className="text-sm text-zinc-500">Predictions are loading late — check back shortly.</p>}
         {!feed && !error && <p className="text-sm text-zinc-500">Loading tonight's picks…</p>}
         {tonight && <PicksTable games={tonight.games} />}
@@ -152,7 +155,9 @@ export default function HomePage() {
         ))}
       </section>
 
-      <p className="pb-4 text-center text-xs text-zinc-400">{copy.site.disclaimer}</p>
+      <p className="pb-4 text-center text-xs text-zinc-400">
+        {copy.site.clockNote} {copy.site.disclaimer}
+      </p>
     </div>
   );
 }

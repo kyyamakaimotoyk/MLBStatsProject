@@ -15,7 +15,11 @@ export type FeedGame = {
   pred_home_runs: number | null;
   pred_away_runs: number | null;
   pred_total: number | null;
-  consensus: number | null;
+  // The betting market's pregame view when a line was captured (closing
+  // preferred, morning line for tonight's games): no-vig home win
+  // probability and the total line. Benchmarks only, never model inputs.
+  market_p_home: number | null;
+  market_total: number | null;
   pick: string;
   pick_chance: number;
   correct: boolean | null;

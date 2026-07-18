@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import { copy } from "@/lib/copy";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,8 +15,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MLB Stats",
-  description: "Daily MLB predictions: margins, totals, and batter matchups",
+  metadataBase: new URL("https://moundmodel.com"),
+  title: {
+    default: `${copy.site.title} — nightly MLB predictions, scored in public`,
+    template: `%s — ${copy.site.title}`,
+  },
+  description: copy.site.subtitle,
+  openGraph: {
+    siteName: copy.site.title,
+    type: "website",
+    url: "/",
+    title: `${copy.site.title} — nightly MLB predictions, scored in public`,
+    description: copy.site.subtitle,
+  },
 };
 
 const nav = [

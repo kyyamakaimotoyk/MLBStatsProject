@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { today } from "@/lib/api";
 import { BattingGame, getPlayer, PitchingGame, PlayerDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
 import { poissonTail } from "@/lib/perf";
@@ -50,7 +51,9 @@ function windowGames<T extends { game_date: string; season: number }>(
     return games.filter((g) => g.season === latest);
   }
   const days = WINDOWS.find((w) => w.key === win)!.days;
-  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const since = new Date(new Date(`${today()}T00:00:00Z`).getTime() - days * 86400000)
+    .toISOString()
+    .slice(0, 10);
   return games.filter((g) => g.game_date >= since);
 }
 

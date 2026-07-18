@@ -18,6 +18,11 @@ router = APIRouter()
 
 PRIMARY = "lgbm_runs"
 
+# The site runs on one clock: US Eastern, MLB's schedule timezone. RDS runs
+# UTC, where current_date rolls to "tomorrow" at 8pm ET — mid-slate — so no
+# query here may use current_date directly.
+ET_TODAY = "(now() AT TIME ZONE 'America/New_York')::date"
+
 
 def _clean(df: pd.DataFrame) -> list[dict]:
     return df.astype(object).where(df.notna(), None).to_dict("records")
@@ -31,15 +36,46 @@ def _no_vig(ml_home, ml_away):
     return ph / (ph + pa)
 
 
+def _with_market(df: pd.DataFrame) -> pd.DataFrame:
+    """Turn raw closing/opening captures into the market's pregame view:
+    a no-vig home win probability and a total line.
+
+    Corruption guard (same as scripts/benchmark_odds.py): pregame MLB win
+    probabilities live in roughly [0.20, 0.85]. An implausible closing
+    capture (in-game contamination) falls back to the opening line; games
+    with neither plausible ship no market fields.
+    """
+    def no_vig_col(home_col: str, away_col: str) -> pd.Series:
+        ok = df[home_col].notna() & df[away_col].notna()
+        out = pd.Series(np.nan, index=df.index)
+        if ok.any():
+            out[ok] = _no_vig(df.loc[ok, home_col], df.loc[ok, away_col])
+        return out
+
+    p_close = no_vig_col("close_ml_home", "close_ml_away")
+    p_open = no_vig_col("open_ml_home", "open_ml_away")
+    close_ok = p_close.between(0.20, 0.85)
+    open_ok = p_open.between(0.20, 0.85)
+    df["market_p_home"] = np.where(close_ok, p_close,
+                                   np.where(open_ok, p_open, np.nan))
+    df["market_total"] = np.where(close_ok, df["close_total"],
+                                  np.where(open_ok, df["open_total"], np.nan))
+    return df.drop(columns=["close_ml_home", "close_ml_away", "close_total",
+                            "open_ml_home", "open_ml_away", "open_total"])
+
+
 def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
-    """One row per game: prediction + result + consensus, newest first."""
+    """One row per game: prediction + result + the market's view, newest first."""
     df = pd.read_sql(text(f"""
         SELECT g.game_pk, g.game_date::text AS game_date, g.status, g.is_final,
                ht.abbrev AS home, ht.name AS home_name,
                at.abbrev AS away, at.name AS away_name,
                g.home_score, g.away_score,
                p.p_home, p.pred_home_runs, p.pred_away_runs, p.pred_total,
-               o.ml_home, o.ml_away
+               c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
+               c.total AS close_total,
+               op.ml_home AS open_ml_home, op.ml_away AS open_ml_away,
+               op.total AS open_total
         FROM games g
         JOIN LATERAL (
             SELECT * FROM model_predictions p
@@ -51,25 +87,28 @@ def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
         JOIN teams at ON at.team_id = g.away_team_id
         LEFT JOIN LATERAL (
             SELECT * FROM odds_lines o
-            WHERE o.game_pk = p.game_pk AND o.ml_home IS NOT NULL
-            ORDER BY o.is_closing DESC, o.captured_at DESC LIMIT 1
-        ) o ON TRUE
-        WHERE g.game_date >= current_date - :days
-          AND g.game_date <{"=" if include_today else ""} current_date
+            WHERE o.game_pk = g.game_pk AND o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) c ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT * FROM odds_lines o
+            WHERE o.game_pk = g.game_pk AND NOT o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) op ON TRUE
+        WHERE g.game_date >= {ET_TODAY} - :days
+          AND g.game_date <{"=" if include_today else ""} {ET_TODAY}
         ORDER BY g.game_date DESC, g.game_pk
     """), get_engine(), params={"model": PRIMARY, "days": days})
     if df.empty:
         return df
-    has_ml = df["ml_home"].notna() & df["ml_away"].notna()
-    df["consensus"] = np.nan
-    if has_ml.any():
-        df.loc[has_ml, "consensus"] = _no_vig(df.loc[has_ml, "ml_home"],
-                                              df.loc[has_ml, "ml_away"])
+    df = _with_market(df)
     df["pick"] = np.where(df["p_home"] >= 0.5, df["home"], df["away"])
     df["pick_chance"] = np.where(df["p_home"] >= 0.5, df["p_home"], 1 - df["p_home"])
     winner = np.where(df["home_score"] > df["away_score"], df["home"], df["away"])
     df["correct"] = np.where(df["is_final"], df["pick"] == winner, None)
-    return df.drop(columns=["ml_home", "ml_away"])
+    return df
 
 
 @router.get("/api/public/summary")
@@ -125,12 +164,12 @@ def feed(days: int = Query(7, le=90)):
     df = _graded_games(days)
     if df.empty:
         raise HTTPException(404, "no games in window")
-    batters = pd.read_sql(text("""
+    batters = pd.read_sql(text(f"""
         SELECT bp.game_pk, pl.full_name AS name, bp.p_hr, bp.exp_h, bp.p_hit
         FROM batter_predictions bp
         JOIN players pl ON pl.player_id = bp.player_id
         JOIN games g ON g.game_pk = bp.game_pk
-        WHERE g.game_date >= current_date - :days
+        WHERE g.game_date >= {ET_TODAY} - :days
         ORDER BY bp.p_hr DESC
     """), get_engine(), params={"days": days})
     top_by_game = {pk: _clean(grp.head(3).drop(columns=["game_pk"]))
@@ -147,7 +186,7 @@ def feed(days: int = Query(7, le=90)):
 @router.get("/api/public/team/{abbrev}")
 def team(abbrev: str, days: int = Query(45, le=120)):
     """A team's recent games with our predictions graded, plus simple form."""
-    df = pd.read_sql(text("""
+    df = pd.read_sql(text(f"""
         SELECT g.game_pk, g.game_date::text AS game_date, g.is_final,
                ht.abbrev AS home, at.abbrev AS away,
                g.home_score, g.away_score, p.p_home, p.pred_home_runs,
@@ -158,7 +197,7 @@ def team(abbrev: str, days: int = Query(45, le=120)):
         LEFT JOIN model_predictions p
           ON p.game_pk = g.game_pk AND p.model_type = :m
         WHERE (ht.abbrev = :ab OR at.abbrev = :ab)
-          AND g.game_date >= current_date - :days
+          AND g.game_date >= {ET_TODAY} - :days
         ORDER BY g.game_date DESC
     """), get_engine(), params={"m": PRIMARY, "ab": abbrev.upper(), "days": days})
     if df.empty:
@@ -193,7 +232,7 @@ def player(player_id: int, days: int = Query(250, le=500)):
     if name.empty:
         raise HTTPException(404, "unknown player")
 
-    bat = pd.read_sql(text("""
+    bat = pd.read_sql(text(f"""
         SELECT g.game_date::text AS game_date, g.season,
                ht.abbrev AS home, at.abbrev AS away,
                g.home_score, g.away_score,
@@ -212,11 +251,11 @@ def player(player_id: int, days: int = Query(250, le=500)):
             LIMIT 1
         ) bp ON TRUE
         WHERE bg.player_id = :p AND g.is_final
-          AND g.game_date >= current_date - :days
+          AND g.game_date >= {ET_TODAY} - :days
         ORDER BY g.game_date DESC
     """), engine, params={"p": player_id, "days": days})
 
-    pit = pd.read_sql(text("""
+    pit = pd.read_sql(text(f"""
         SELECT g.game_date::text AS game_date, g.season,
                ht.abbrev AS home, at.abbrev AS away,
                g.home_score, g.away_score,
@@ -227,7 +266,7 @@ def player(player_id: int, days: int = Query(250, le=500)):
         JOIN teams ht ON ht.team_id = g.home_team_id
         JOIN teams at ON at.team_id = g.away_team_id
         WHERE pg.player_id = :p AND g.is_final
-          AND g.game_date >= current_date - :days
+          AND g.game_date >= {ET_TODAY} - :days
         ORDER BY g.game_date DESC
     """), engine, params={"p": player_id, "days": days})
 
@@ -353,7 +392,7 @@ def results(days: int = Query(1400, le=2000)):
     no-vig closing win probability and the closing total line — so the
     browser can grade the model against the betting market on the same
     games. Lines are benchmarks only, never model inputs (hard rule)."""
-    df = pd.read_sql(text("""
+    df = pd.read_sql(text(f"""
         SELECT g.game_date::text AS game_date, p.p_home, p.pred_margin,
                p.pred_total,
                g.home_score - g.away_score AS margin,
@@ -382,34 +421,12 @@ def results(days: int = Query(1400, le=2000)):
               AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
             ORDER BY o.captured_at DESC LIMIT 1
         ) op ON TRUE
-        WHERE g.is_final AND g.game_date >= current_date - :days
+        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
         ORDER BY g.game_date
     """), get_engine(), params={"m": PRIMARY, "days": days})
     if df.empty:
         return []
-
-    # Corruption guard (same as scripts/benchmark_odds.py): pregame MLB win
-    # probabilities live in roughly [0.20, 0.85]. An implausible closing
-    # capture (in-game contamination) falls back to the opening line; games
-    # with neither plausible ship no market fields.
-    def no_vig_col(home_col: str, away_col: str) -> pd.Series:
-        ok = df[home_col].notna() & df[away_col].notna()
-        out = pd.Series(np.nan, index=df.index)
-        if ok.any():
-            out[ok] = _no_vig(df.loc[ok, home_col], df.loc[ok, away_col])
-        return out
-
-    p_close = no_vig_col("close_ml_home", "close_ml_away")
-    p_open = no_vig_col("open_ml_home", "open_ml_away")
-    close_ok = p_close.between(0.20, 0.85)
-    open_ok = p_open.between(0.20, 0.85)
-    df["market_p_home"] = np.where(close_ok, p_close,
-                                   np.where(open_ok, p_open, np.nan))
-    df["market_total"] = np.where(close_ok, df["close_total"],
-                                  np.where(open_ok, df["open_total"], np.nan))
-    df = df.drop(columns=["close_ml_home", "close_ml_away", "close_total",
-                          "open_ml_home", "open_ml_away", "open_total"])
-    return _clean(df)
+    return _clean(_with_market(df))
 
 
 @router.get("/api/public/batter-results")
@@ -459,13 +476,13 @@ def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"
     expects the opposing lineup to do over the whole game (per-hitter calls
     summed). Freshest probables win: the daily capture beats the backfill."""
     engine = get_engine()
-    board = pd.read_sql(text("""
+    board = pd.read_sql(text(f"""
         WITH probs AS (
             SELECT DISTINCT ON (p.game_pk)
                    p.game_pk, p.home_pitcher_id, p.away_pitcher_id
             FROM probable_pitchers p
             JOIN games g USING (game_pk)
-            WHERE g.game_date = COALESCE(CAST(:date AS date), current_date)
+            WHERE g.game_date = COALESCE(CAST(:date AS date), {ET_TODAY})
             ORDER BY p.game_pk, (p.source = 'daily') DESC, p.captured_at DESC
         )
         SELECT g.game_pk, g.game_date::text AS game_date, g.season,
@@ -485,7 +502,7 @@ def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"
         raise HTTPException(404, "no probable starters posted for that date")
 
     season = int(board["season"].iloc[0])
-    stats = pd.read_sql(text("""
+    stats = pd.read_sql(text(f"""
         SELECT pg.player_id AS pitcher_id,
                count(*) FILTER (WHERE pg.is_starter) AS starts,
                sum(pg.outs) AS outs, sum(pg.er) AS er, sum(pg.so) AS k,
@@ -493,7 +510,7 @@ def pitchers_board(date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"
         FROM pitcher_game_lines pg
         JOIN games g USING (game_pk)
         WHERE g.is_final AND g.season = :season
-          AND g.game_date < COALESCE(CAST(:date AS date), current_date)
+          AND g.game_date < COALESCE(CAST(:date AS date), {ET_TODAY})
           AND pg.player_id = ANY(:ids)
         GROUP BY 1
     """), engine, params={"season": season, "date": date,

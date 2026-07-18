@@ -11,6 +11,9 @@ export const copy = {
     disclaimer: "Predictions are machine-learning model output, not betting advice.",
     ctaTonight: "Tonight's picks",
     ctaRecord: "See the track record",
+    noTonight: "Tonight's picks aren't posted yet",
+    noTonightSub: "New picks go up every morning, US time.",
+    clockNote: "All dates are US Eastern time.",
   },
   nav: [
     { href: "/", label: "Tonight" },
@@ -31,6 +34,8 @@ export const copy = {
     winChance: "Win chance",
     scoreCall: "Score call",
     totalRuns: "Total runs",
+    marketFavorite: "Market favorite",
+    marketTotal: "Market total",
     final: "Final",
     result: "Result",
     coinFlip: "coin flip",
@@ -69,4 +74,12 @@ export function scoreCall(home: string, away: string, hr: number | null, ar: num
 export function finalScore(home: string, away: string, hs: number | null, as_: number | null) {
   if (hs == null || as_ == null) return "—";
   return hs > as_ ? `${home} ${hs}–${as_}` : `${away} ${as_}–${hs}`;
+}
+
+// The betting market's favorite with its no-vig win chance, e.g. "NYY 62%".
+export function marketCall(home: string, away: string, pHome: number | null) {
+  if (pHome == null) return "—";
+  if (pHome === 0.5) return "even";
+  const fav = pHome > 0.5 ? home : away;
+  return `${fav} ${pctLabel(Math.max(pHome, 1 - pHome))}`;
 }

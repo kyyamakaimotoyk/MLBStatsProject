@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getTeam, TeamDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
+import { useLang } from "@/lib/i18n";
 import { ResultMark } from "@/components/shared";
 
 export default function TeamPage() {
@@ -15,6 +16,7 @@ export default function TeamPage() {
 }
 
 function TeamContent() {
+  const { t } = useLang();
   const abbrev = useSearchParams().get("ab");
   const [team, setTeam] = useState<TeamDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,17 +25,20 @@ function TeamContent() {
     if (abbrev) getTeam(abbrev).then(setTeam).catch((e) => setError(String(e)));
   }, [abbrev]);
 
-  if (error) return <p className="text-sm text-zinc-500">No recent games found.</p>;
-  if (!team) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-zinc-500">{t.teamPage.notFound}</p>;
+  if (!team) return <p className="text-sm text-zinc-500">{t.common.loading}</p>;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">{team.team}</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Last 10: <span className="font-semibold">{team.last10_wins}–{team.last10_losses}</span>
+          {t.teamPage.last10}{" "}
+          <span className="font-semibold">
+            {t.common.wl(`${team.last10_wins}`, `${team.last10_losses}`)}
+          </span>
           {team.runs_per_game_l10 != null && (
-            <> · scoring {team.runs_per_game_l10.toFixed(1)} runs a game</>
+            <> · {t.teamPage.scoring(team.runs_per_game_l10.toFixed(1))}</>
           )}
         </p>
       </div>
@@ -41,12 +46,12 @@ function TeamContent() {
         <table className="w-full text-sm">
           <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
             <tr>
-              <th className="px-3 py-2">Date</th>
-              <th className="px-3 py-2">Game</th>
-              <th className="px-3 py-2 text-right">Score</th>
-              <th className="px-3 py-2 text-right">W/L</th>
-              <th className="px-3 py-2 text-right">Our call</th>
-              <th className="px-3 py-2 text-right">Right?</th>
+              <th className="px-3 py-2">{t.teamPage.colDate}</th>
+              <th className="px-3 py-2">{t.teamPage.colGame}</th>
+              <th className="px-3 py-2 text-right">{t.teamPage.colScore}</th>
+              <th className="px-3 py-2 text-right">{t.teamPage.colWl}</th>
+              <th className="px-3 py-2 text-right">{t.teamPage.colOurCall}</th>
+              <th className="px-3 py-2 text-right">{t.teamPage.colRight}</th>
             </tr>
           </thead>
           <tbody>
@@ -75,7 +80,7 @@ function TeamContent() {
                         className="font-semibold"
                         style={{ color: g.team_won ? "var(--good-text)" : "var(--bad-text)" }}
                       >
-                        {g.team_won ? "W" : "L"}
+                        {g.team_won ? t.teamPage.win : t.teamPage.loss}
                       </span>
                     )}
                   </td>
@@ -83,8 +88,8 @@ function TeamContent() {
                     {usWinChance == null
                       ? "—"
                       : pickedUs
-                        ? `${team.team} to win (${pctLabel(usWinChance)})`
-                        : `opponent (${pctLabel(1 - usWinChance)})`}
+                        ? t.teamPage.teamToWin(team.team, pctLabel(usWinChance))
+                        : t.teamPage.opponent(pctLabel(1 - usWinChance))}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <ResultMark correct={correct} />

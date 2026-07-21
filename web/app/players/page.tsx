@@ -5,6 +5,7 @@ import Link from "next/link";
 import { getJSON, today } from "@/lib/api";
 import { getPitcherBoard, PitcherBoardRow, searchPlayers } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
+import { useLang } from "@/lib/i18n";
 
 type BatterRow = {
   game_pk: number;
@@ -21,6 +22,7 @@ type BatterRow = {
 };
 
 export default function PlayersPage() {
+  const { t } = useLang();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ player_id: number; full_name: string }[]>([]);
   const [board, setBoard] = useState<BatterRow[] | null>(null);
@@ -47,24 +49,22 @@ export default function PlayersPage() {
       setResults([]);
       return;
     }
-    const t = setTimeout(() => searchPlayers(q).then(setResults).catch(() => {}), 250);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => searchPlayers(q).then(setResults).catch(() => {}), 250);
+    return () => clearTimeout(timer);
   }, [q]);
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">Players</h1>
-        <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Look up any player's recent games and how our calls on them have done.
-        </p>
+        <h1 className="text-2xl font-bold">{t.players.title}</h1>
+        <p className="mt-1 text-zinc-600 dark:text-zinc-400">{t.players.subtitle}</p>
       </div>
 
       <div className="relative max-w-md">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search a player, e.g. Juan Soto"
+          placeholder={t.players.searchPlaceholder}
           className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         />
         {results.length > 0 && (
@@ -85,26 +85,23 @@ export default function PlayersPage() {
       </div>
 
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Tonight's hitter board</h2>
-        <p className="text-sm text-zinc-500">
-          Ranked by home-run chance — the call that separates hitters most on
-          any given night.
-        </p>
-        {!board && <p className="text-sm text-zinc-500">Loading…</p>}
+        <h2 className="text-lg font-semibold">{t.players.hitterBoardTitle}</h2>
+        <p className="text-sm text-zinc-500">{t.players.hitterBoardSub}</p>
+        {!board && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
         {board && board.length === 0 && (
-          <p className="text-sm text-zinc-500">No hitter predictions posted yet today.</p>
+          <p className="text-sm text-zinc-500">{t.players.noHitters}</p>
         )}
         {board && board.length > 0 && (
           <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                 <tr>
-                  <th className="px-3 py-2">Hitter</th>
-                  <th className="px-3 py-2">Game</th>
-                  <th className="px-3 py-2">Facing</th>
-                  <th className="px-3 py-2 text-right">Homers</th>
-                  <th className="px-3 py-2 text-right">2+ total bases</th>
-                  <th className="px-3 py-2 text-right">Gets a hit</th>
+                  <th className="px-3 py-2">{t.players.colHitter}</th>
+                  <th className="px-3 py-2">{t.players.colGame}</th>
+                  <th className="px-3 py-2">{t.players.colFacing}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colHomers}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colTb2}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colHit}</th>
                 </tr>
               </thead>
               <tbody>
@@ -121,7 +118,7 @@ export default function PlayersPage() {
                     <td className="px-3 py-2 text-zinc-500">
                       {r.away} @ {r.home}
                     </td>
-                    <td className="px-3 py-2 text-zinc-500">{r.probable_pitcher ?? "TBD"}</td>
+                    <td className="px-3 py-2 text-zinc-500">{r.probable_pitcher ?? t.common.tbd}</td>
                     <td className="px-3 py-2 text-right font-medium">{pctLabel(r.p_hr)}</td>
                     <td className="px-3 py-2 text-right">{pctLabel(r.p_tb2)}</td>
                     <td className="px-3 py-2 text-right text-zinc-500">{pctLabel(r.p_hit)}</td>
@@ -131,38 +128,29 @@ export default function PlayersPage() {
             </table>
           </div>
         )}
-        <p className="text-xs text-zinc-400">
-          Chances cover the whole game. We lead with home runs and extra bases
-          because they separate hitters — most starters get a hit on any given
-          night, so &quot;gets a hit&quot; runs 50–70% for nearly everyone.
-        </p>
+        <p className="text-xs text-zinc-400">{t.players.hitterFoot}</p>
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Tonight's pitching matchups</h2>
-        <p className="text-sm text-zinc-500">
-          Every probable starter, with what our model expects them to allow
-          while they&apos;re in the game — strikeouts, walks, and hits, built
-          from our per-hitter calls against the exact lineup they face. Most
-          strikeouts expected first.
-        </p>
-        {!pitchers && <p className="text-sm text-zinc-500">Loading…</p>}
+        <h2 className="text-lg font-semibold">{t.players.pitchingTitle}</h2>
+        <p className="text-sm text-zinc-500">{t.players.pitchingSub}</p>
+        {!pitchers && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
         {pitchers && pitchers.length === 0 && (
-          <p className="text-sm text-zinc-500">No probable starters posted yet today.</p>
+          <p className="text-sm text-zinc-500">{t.players.noPitchers}</p>
         )}
         {pitchers && pitchers.length > 0 && (
           <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                 <tr>
-                  <th className="px-3 py-2">Pitcher</th>
-                  <th className="px-3 py-2">Game</th>
-                  <th className="px-3 py-2 text-right">ERA</th>
-                  <th className="px-3 py-2 text-right">WHIP</th>
-                  <th className="px-3 py-2 text-right">K/9</th>
-                  <th className="px-3 py-2 text-right">Ks expected</th>
-                  <th className="px-3 py-2 text-right">Walks expected</th>
-                  <th className="px-3 py-2 text-right">Hits allowed expected</th>
+                  <th className="px-3 py-2">{t.players.colPitcher}</th>
+                  <th className="px-3 py-2">{t.players.colGame}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colEra}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colWhip}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colK9}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colExpK}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colExpBb}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colExpH}</th>
                 </tr>
               </thead>
               <tbody>
@@ -180,7 +168,7 @@ export default function PlayersPage() {
                       </Link>
                       <span className="ml-2 text-xs text-zinc-500">
                         {r.team}
-                        {r.throws ? ` · ${r.throws}HP` : ""}
+                        {r.throws ? ` · ${t.players.throws(r.throws)}` : ""}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-zinc-500">
@@ -210,12 +198,7 @@ export default function PlayersPage() {
             </table>
           </div>
         )}
-        <p className="text-xs text-zinc-400">
-          Season numbers are through last night. &quot;Expected&quot; columns
-          cover only the starter&apos;s share of the game — how long he
-          typically lasts, against tonight&apos;s exact lineup — so they read
-          like a real pitching line.
-        </p>
+        <p className="text-xs text-zinc-400">{t.players.pitchingFoot}</p>
       </section>
     </div>
   );

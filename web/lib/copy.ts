@@ -1,63 +1,14 @@
-// Centralized user-facing copy (the hoopmodel.com pattern). Plain language
-// only: no odds, no statistical jargon, no gambling terms.
-export const copy = {
-  site: {
-    title: "MLB Model",
-    tagline: "Nightly MLB predictions — with receipts.",
-    subtitle:
-      "A machine-learning model picks every MLB game — the winner, the score, " +
-      "and the hitters to watch. Every prediction is logged, graded against the " +
-      "real result, and published. Hits and misses alike.",
-    disclaimer: "Predictions are machine-learning model output, not betting advice.",
-    ctaTonight: "Tonight's picks",
-    ctaRecord: "See the track record",
-    noTonight: "Tonight's picks aren't posted yet",
-    noTonightSub: "New picks go up every morning, US time.",
-    clockNote: "All dates are US Eastern time.",
-  },
-  nav: [
-    { href: "/", label: "Tonight" },
-    { href: "/record", label: "Record" },
-    { href: "/teams", label: "Teams" },
-    { href: "/players", label: "Players" },
-    { href: "/performance", label: "Model lab" },
-  ],
-  proof: {
-    winners: (window: string) => `winners called, ${window}`,
-    scoreMiss: (window: string) => `average score miss, ${window}`,
-    logged: "predictions logged",
-    loggedSub: "and publicly scored",
-  },
-  table: {
-    matchup: "Matchup",
-    pick: "Pick",
-    winChance: "Win chance",
-    scoreCall: "Score call",
-    totalRuns: "Total runs",
-    marketFavorite: "Market favorite",
-    marketTotal: "Market total",
-    final: "Final",
-    result: "Result",
-    coinFlip: "coin flip",
-  },
-  steps: [
-    {
-      title: "Every pitch, in",
-      body: "Play-by-play and pitch-level data from every MLB game, updated each morning.",
-    },
-    {
-      title: "Rolling form",
-      body: "Each team's recent play — and tonight's actual lineup — distilled into features.",
-    },
-    {
-      title: "One model, three calls",
-      body: "A gradient-boosted model predicts each team's runs: that's the winner, the score, and the game total.",
-    },
-    {
-      title: "Scored in public",
-      body: "Picks post every morning, then get graded against the final score.",
-    },
-  ],
+// Formatting helpers shared across pages. All user-facing copy lives in
+// lib/translations.ts (en/ja); only language-neutral formatters and the
+// English-only SEO metadata belong here.
+
+// Static export prerenders in English, so search/OG metadata stays English.
+export const siteMeta = {
+  title: "MLB Model",
+  subtitle:
+    "A machine-learning model picks every MLB game — the winner, the score, " +
+    "and the hitters to watch. Every prediction is logged, graded against the " +
+    "real result, and published. Hits and misses alike.",
 };
 
 export function pctLabel(p: number | null | undefined): string {
@@ -77,9 +28,15 @@ export function finalScore(home: string, away: string, hs: number | null, as_: n
 }
 
 // The betting market's favorite with its no-vig win chance, e.g. "NYY 62%".
-export function marketCall(home: string, away: string, pHome: number | null) {
+// evenLabel is the localized word for a pick'em line.
+export function marketCall(
+  home: string,
+  away: string,
+  pHome: number | null,
+  evenLabel = "even",
+) {
   if (pHome == null) return "—";
-  if (pHome === 0.5) return "even";
+  if (pHome === 0.5) return evenLabel;
   const fav = pHome > 0.5 ? home : away;
   return `${fav} ${pctLabel(Math.max(pHome, 1 - pHome))}`;
 }

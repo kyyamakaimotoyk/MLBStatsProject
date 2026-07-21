@@ -26,6 +26,7 @@ import {
   skillCurve,
   totalSkillCurve,
 } from "@/lib/perf";
+import { useLang } from "@/lib/i18n";
 
 const S1 = "var(--series-1)";
 const S2 = "var(--series-2)";
@@ -76,12 +77,11 @@ function ChartPanel({
 }
 
 export function ConfidenceCurveChart({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const c = t.charts.confidence;
   const data = confidenceCurve(rows);
   return (
-    <ChartPanel
-      title="Hit rate by pick confidence"
-      sub="Confidence is the win chance the model gave its own pick. The orange line is the hit rate counting only picks at least that confident; the blue line is the share of games that clears the bar. A well-behaved model climbs from left to right — its surer picks should land more often. The dashed line is coin-flip."
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -90,26 +90,26 @@ export function ConfidenceCurveChart({ rows }: { rows: ResultRow[] }) {
             tick={{ fill: TEXT, fontSize: 11 }}
             tickFormatter={(v) => `${v}%+`}
             stroke={GRID}
-            label={xLabel("Minimum win chance to count the pick")}
+            label={xLabel(c.x)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             unit="%"
             stroke={GRID}
             domain={[0, 100]}
-            label={yLabel("Percent of games")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
             formatter={(v, name) => [
               `${Number(v).toFixed(1)}%`,
-              String(name) === "accuracy" ? "Hit rate" : "Share of games",
+              String(name) === "accuracy" ? c.hitRate : t.charts.shareOfGames,
             ]}
-            labelFormatter={(v) => `Confidence at least ${v}%`}
+            labelFormatter={(v) => c.atLeast(String(v))}
           />
           <Legend
             verticalAlign="top"
-            formatter={(v) => (v === "accuracy" ? "Hit rate" : "Share of games kept")}
+            formatter={(v) => (v === "accuracy" ? c.hitRate : c.shareKept)}
             wrapperStyle={{ fontSize: 12 }}
           />
           <ReferenceLine y={50} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
@@ -122,13 +122,12 @@ export function ConfidenceCurveChart({ rows }: { rows: ResultRow[] }) {
 }
 
 export function SkillCurveChart({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const c = t.charts.skill;
   const data = skillCurve(rows);
   if (data.length < 2) return null;
   return (
-    <ChartPanel
-      title="Skill curve — wins above coin-flip"
-      sub="The running total of correct picks minus half the games played: a coin-flipper drifts along zero, skill climbs. Both lines count only games with a pregame line, so the market benchmark is on the same footing."
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -137,23 +136,23 @@ export function SkillCurveChart({ rows }: { rows: ResultRow[] }) {
             tick={{ fill: TEXT, fontSize: 10 }}
             stroke={GRID}
             minTickGap={28}
-            label={xLabel("Date")}
+            label={xLabel(t.charts.date)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             stroke={GRID}
-            label={yLabel("Wins above coin-flip")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
             formatter={(v, name) => [
               Number(v).toFixed(1),
-              String(name) === "model" ? "Our model" : "Market favorite",
+              String(name) === "model" ? c.model : c.market,
             ]}
           />
           <Legend
             verticalAlign="top"
-            formatter={(v) => (v === "model" ? "Our model" : "Market favorite")}
+            formatter={(v) => (v === "model" ? c.model : c.market)}
             wrapperStyle={{ fontSize: 12 }}
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
@@ -173,13 +172,12 @@ export function SkillCurveChart({ rows }: { rows: ResultRow[] }) {
 }
 
 export function TotalSkillCurveChart({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const c = t.charts.totalSkill;
   const data = totalSkillCurve(rows);
   if (data.length < 2) return null;
   return (
-    <ChartPanel
-      title="Skill curve — the total, over or under"
-      sub="The same running total for the over/under: our side of the market's total line, right calls minus half the games. Games that land exactly on the line are pushes and count for nobody."
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -188,16 +186,16 @@ export function TotalSkillCurveChart({ rows }: { rows: ResultRow[] }) {
             tick={{ fill: TEXT, fontSize: 10 }}
             stroke={GRID}
             minTickGap={28}
-            label={xLabel("Date")}
+            label={xLabel(t.charts.date)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             stroke={GRID}
-            label={yLabel("Right calls above coin-flip")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
-            formatter={(v) => [Number(v).toFixed(1), "Our over/under calls"]}
+            formatter={(v) => [Number(v).toFixed(1), c.series]}
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
           <Line type="linear" dataKey="model" stroke={S1} strokeWidth={2} dot={{ r: 2 }} />
@@ -208,15 +206,12 @@ export function TotalSkillCurveChart({ rows }: { rows: ResultRow[] }) {
 }
 
 export function BatterSkillCurveChart({ days }: { days: BatterDay[] }) {
+  const { t } = useLang();
+  const c = t.charts.batterSkill;
   const data = batterSkillCurve(days);
   if (data.length < 2) return null;
   return (
-    <ChartPanel
-      title="Skill curve — the hit calls"
-      sub={
-        'The same running total for "gets a hit tonight?" — but most starters do get a hit, so the dashed line is the lazy rule that says yes for everyone, not a coin-flip. We count right calls above that rule\'s pace on the same nights; skill is only what climbs above zero.'
-      }
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -225,19 +220,19 @@ export function BatterSkillCurveChart({ days }: { days: BatterDay[] }) {
             tick={{ fill: TEXT, fontSize: 10 }}
             stroke={GRID}
             minTickGap={28}
-            label={xLabel("Date")}
+            label={xLabel(t.charts.date)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             stroke={GRID}
             allowDecimals={false}
-            label={yLabel("Right calls above the lazy rule")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
             formatter={(v) => [
               Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
-              "Our calls vs the lazy rule",
+              c.series,
             ]}
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
@@ -249,15 +244,12 @@ export function BatterSkillCurveChart({ days }: { days: BatterDay[] }) {
 }
 
 export function HrWatchCurveChart({ days }: { days: BatterDay[] }) {
+  const { t } = useLang();
+  const c = t.charts.hrWatch;
   const data = hrWatchCurve(days);
   if (data.length < 2) return null;
   return (
-    <ChartPanel
-      title="Skill curve — the home-run watch"
-      sub={
-        "Each night the model names its five likeliest hitters to homer. Five random starters would homer at the night's base rate — the dashed line. This counts homers by our five above that pace; skill is only what climbs above zero."
-      }
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={data} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -266,18 +258,18 @@ export function HrWatchCurveChart({ days }: { days: BatterDay[] }) {
             tick={{ fill: TEXT, fontSize: 10 }}
             stroke={GRID}
             minTickGap={28}
-            label={xLabel("Date")}
+            label={xLabel(t.charts.date)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             stroke={GRID}
-            label={yLabel("Homers above chance")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
             formatter={(v) => [
               Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 }),
-              "Our five vs chance",
+              c.series,
             ]}
           />
           <ReferenceLine y={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
@@ -289,12 +281,11 @@ export function HrWatchCurveChart({ days }: { days: BatterDay[] }) {
 }
 
 export function RocChart({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const c = t.charts.roc;
   const { points, auc } = roc(rows);
   return (
-    <ChartPanel
-      title={`Telling winners from losers — score ${auc.toFixed(2)}`}
-      sub="The curve should bow above the dashed line. 0.50 is guessing; 1.00 is perfect. (This is the ROC curve.)"
-    >
+    <ChartPanel title={c.title(auc.toFixed(2))} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={points} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -305,14 +296,14 @@ export function RocChart({ rows }: { rows: ResultRow[] }) {
             tick={{ fill: TEXT, fontSize: 11 }}
             unit="%"
             stroke={GRID}
-            label={xLabel("False alarms — losses we called wins")}
+            label={xLabel(c.x)}
           />
           <YAxis
             domain={[0, 100]}
             tick={{ fill: TEXT, fontSize: 11 }}
             unit="%"
             stroke={GRID}
-            label={yLabel("Wins we caught")}
+            label={yLabel(c.y)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
@@ -335,12 +326,11 @@ export function RocChart({ rows }: { rows: ResultRow[] }) {
 }
 
 export function MarginMissChart({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const c = t.charts.marginMiss;
   const data = marginMissHistogram(rows);
   return (
-    <ChartPanel
-      title="How far the score calls miss"
-      sub="Predicted margin minus the real margin, in runs. Centered on zero is honest; the spread is baseball."
-    >
+    <ChartPanel title={c.title} sub={c.sub}>
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={data} barCategoryGap={2} margin={{ top: 4, right: 12, left: 4, bottom: 14 }}>
           <CartesianGrid stroke={GRID} strokeWidth={1} vertical={false} />
@@ -349,21 +339,18 @@ export function MarginMissChart({ rows }: { rows: ResultRow[] }) {
             tick={{ fill: TEXT, fontSize: 11 }}
             tickFormatter={(v) => (v > 0 ? `+${v}` : `${v}`)}
             stroke={GRID}
-            label={xLabel("Runs off — predicted margin minus actual")}
+            label={xLabel(c.x)}
           />
           <YAxis
             tick={{ fill: TEXT, fontSize: 11 }}
             unit="%"
             stroke={GRID}
-            label={yLabel("Share of games")}
+            label={yLabel(t.charts.shareOfGames)}
           />
           <Tooltip
             contentStyle={tooltipStyle}
-            formatter={(v) => [`${Number(v).toFixed(1)}% of games`]}
-            labelFormatter={(v) => {
-              const n = Number(v);
-              return `missed by ${n > 0 ? `+${n}` : n} run${Math.abs(n) === 1 ? "" : "s"}`;
-            }}
+            formatter={(v) => [c.pctOfGames(Number(v).toFixed(1))]}
+            labelFormatter={(v) => c.missedBy(Number(v))}
           />
           <ReferenceLine x={0} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
           <Bar dataKey="share" fill={S2} radius={[4, 4, 0, 0]} />
@@ -374,6 +361,8 @@ export function MarginMissChart({ rows }: { rows: ResultRow[] }) {
 }
 
 export function ConfusionMatrix({ rows }: { rows: ResultRow[] }) {
+  const { t } = useLang();
+  const cd = t.charts.confusion;
   const c = confusion(rows);
   const total = rows.length;
   const cell = (n: number, good: boolean) => (
@@ -385,33 +374,30 @@ export function ConfusionMatrix({ rows }: { rows: ResultRow[] }) {
       }}
     >
       <div className="text-lg font-bold">{((100 * n) / total).toFixed(1)}%</div>
-      <div className="text-xs opacity-80">{n.toLocaleString()} games</div>
+      <div className="text-xs opacity-80">{cd.nGames(n.toLocaleString())}</div>
     </td>
   );
   return (
-    <ChartPanel
-      title="Picks vs what happened"
-      sub="Green cells are correct picks; red cells are misses. Rows are our pick, columns the real winner."
-    >
+    <ChartPanel title={cd.title} sub={cd.sub}>
       <table className="w-full border-separate border-spacing-0.5 text-sm">
         <thead>
           <tr className="text-xs text-zinc-500">
             <th></th>
-            <th className="px-4 py-1">Home team won</th>
-            <th className="px-4 py-1">Away team won</th>
+            <th className="px-4 py-1">{cd.homeWon}</th>
+            <th className="px-4 py-1">{cd.awayWon}</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <th className="pr-2 text-right text-xs font-medium text-zinc-500">
-              Picked home
+              {cd.pickedHome}
             </th>
             {cell(c.homePickHomeWin, true)}
             {cell(c.homePickAwayWin, false)}
           </tr>
           <tr>
             <th className="pr-2 text-right text-xs font-medium text-zinc-500">
-              Picked away
+              {cd.pickedAway}
             </th>
             {cell(c.awayPickHomeWin, false)}
             {cell(c.awayPickAwayWin, true)}
@@ -437,6 +423,7 @@ function GameTooltip({ active, payload, statLabel }: {
   payload?: { payload: GamePoint; dataKey: string; value: number }[];
   statLabel: string;
 }) {
+  const { t } = useLang();
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
@@ -446,7 +433,7 @@ function GameTooltip({ active, payload, statLabel }: {
       </div>
       {d.home_score != null && (
         <div style={{ color: "var(--viz-text)" }}>
-          Final: {d.away} {d.away_score} – {d.home} {d.home_score}
+          {t.charts.gameTooltip.final} {d.away} {d.away_score} – {d.home} {d.home_score}
         </div>
       )}
       <div className="mt-1">
@@ -454,7 +441,7 @@ function GameTooltip({ active, payload, statLabel }: {
         {d.expected != null && (
           <span style={{ color: "var(--viz-text)" }}>
             {" "}
-            (we expected {d.expected.toFixed(1)})
+            {t.charts.gameTooltip.expected(d.expected.toFixed(1))}
           </span>
         )}
       </div>
@@ -469,6 +456,7 @@ export function PlayerCountingChart({
   points: GamePoint[];
   statLabel: string;
 }) {
+  const { t } = useLang();
   const data = points.map((p) => ({ ...p, date: p.date.slice(5) }));
   if (data.length === 0) return null;
   const hasExpected = data.some((d) => d.expected != null);
@@ -480,7 +468,7 @@ export function PlayerCountingChart({
           dataKey="date"
           tick={{ fill: TEXT, fontSize: 10 }}
           stroke={GRID}
-          label={xLabel("Game date")}
+          label={xLabel(t.charts.gameDate)}
         />
         <YAxis
           tick={{ fill: TEXT, fontSize: 11 }}
@@ -492,7 +480,9 @@ export function PlayerCountingChart({
         {hasExpected && (
           <Legend
             verticalAlign="top"
-            formatter={(v) => (v === "actual" ? `Actual ${statLabel.toLowerCase()}` : "We expected")}
+            formatter={(v) =>
+              v === "actual" ? t.charts.counting.actualStat(statLabel) : t.charts.counting.expectedSeries
+            }
             wrapperStyle={{ fontSize: 12 }}
           />
         )}
@@ -516,6 +506,8 @@ export function ClearCurveChart({
   line: number;
   statLabel: string;
 }) {
+  const { t } = useLang();
+  const c = t.charts.clear;
   const data = empirical.map((e) => ({
     k: e.k,
     window: e.share * 100,
@@ -529,26 +521,26 @@ export function ClearCurveChart({
           dataKey="k"
           tick={{ fill: TEXT, fontSize: 11 }}
           stroke={GRID}
-          label={xLabel(`${statLabel} — at least this many`)}
+          label={xLabel(c.x(statLabel))}
         />
         <YAxis
           domain={[0, 100]}
           unit="%"
           tick={{ fill: TEXT, fontSize: 11 }}
           stroke={GRID}
-          label={yLabel("Chance of clearing it")}
+          label={yLabel(c.y)}
         />
         <Tooltip
           contentStyle={tooltipStyle}
           formatter={(v, name) => [
             `${Number(v).toFixed(0)}%`,
-            String(name) === "window" ? "Recent games" : "Model, next game",
+            String(name) === "window" ? c.window : c.model,
           ]}
           labelFormatter={(v) => `${statLabel} ≥ ${v}`}
         />
         <Legend
           verticalAlign="top"
-          formatter={(v) => (v === "window" ? "Recent games" : "Model, next game")}
+          formatter={(v) => (v === "window" ? c.window : c.model)}
           wrapperStyle={{ fontSize: 12 }}
         />
         <ReferenceLine x={line} stroke={REF} strokeDasharray="4 4" strokeWidth={1} />
@@ -571,6 +563,7 @@ export function TeamTrendsChart({
   series: { team: string; points: { date: string; rolling: number | null }[] }[];
   statLabel: string;
 }) {
+  const { t } = useLang();
   const dates = [...new Set(series.flatMap((s) => s.points.map((p) => p.date)))].sort();
   const rows = dates.map((date) => {
     const row: Record<string, string | number | null> = { date: date.slice(5) };
@@ -589,12 +582,12 @@ export function TeamTrendsChart({
           tick={{ fill: TEXT, fontSize: 10 }}
           stroke={GRID}
           minTickGap={24}
-          label={xLabel("Date")}
+          label={xLabel(t.charts.date)}
         />
         <YAxis
           tick={{ fill: TEXT, fontSize: 11 }}
           stroke={GRID}
-          label={yLabel(`${statLabel} (10-game average)`)}
+          label={yLabel(t.charts.trends.y(statLabel))}
         />
         <Tooltip
           contentStyle={tooltipStyle}

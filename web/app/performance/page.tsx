@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getJSON, fmtNum, fmtPct } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 type TeamPerf = {
   model_type: string;
@@ -34,6 +35,7 @@ type Performance = {
 };
 
 export default function PerformancePage() {
+  const { t } = useLang();
   const [days, setDays] = useState(30);
   const [data, setData] = useState<Performance | null>(null);
 
@@ -47,7 +49,7 @@ export default function PerformancePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Model performance</h1>
+        <h1 className="text-lg font-semibold">{t.perf.title}</h1>
         <select
           value={days}
           onChange={(e) => setDays(Number(e.target.value))}
@@ -55,30 +57,30 @@ export default function PerformancePage() {
         >
           {[7, 30, 90, 365].map((d) => (
             <option key={d} value={d}>
-              last {d} days
+              {t.perf.lastNDays(d)}
             </option>
           ))}
         </select>
       </div>
-      {!data && <p className="text-sm text-zinc-500">Loading…</p>}
+      {!data && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
       {data && (
         <>
           <section className="space-y-2">
             <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400">
-              Team models (vs final scores)
+              {t.perf.teamHeading}
             </h2>
             {data.team.length === 0 ? (
-              <p className="text-sm text-zinc-500">No graded predictions yet.</p>
+              <p className="text-sm text-zinc-500">{t.perf.noGraded}</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                   <tr>
-                    <th className="px-3 py-2">Model</th>
-                    <th className="px-3 py-2">Version</th>
-                    <th className="px-3 py-2 text-right">N</th>
-                    <th className="px-3 py-2 text-right">Win acc</th>
-                    <th className="px-3 py-2 text-right">Margin MAE</th>
-                    <th className="px-3 py-2 text-right">Total MAE</th>
+                    <th className="px-3 py-2">{t.perf.colModel}</th>
+                    <th className="px-3 py-2">{t.perf.colVersion}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colN}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colWinAcc}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colMarginMae}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colTotalMae}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -101,22 +103,20 @@ export default function PerformancePage() {
           </section>
           <section className="space-y-2">
             <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400">
-              Vs closing line
+              {t.perf.marketHeading}
             </h2>
             {(data.market ?? []).length === 0 ? (
-              <p className="text-sm text-zinc-500">
-                No graded games with captured closing lines yet.
-              </p>
+              <p className="text-sm text-zinc-500">{t.perf.noMarket}</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                   <tr>
-                    <th className="px-3 py-2">Model</th>
-                    <th className="px-3 py-2">Version</th>
-                    <th className="px-3 py-2 text-right">N</th>
-                    <th className="px-3 py-2 text-right">Model acc</th>
-                    <th className="px-3 py-2 text-right">Market acc</th>
-                    <th className="px-3 py-2 text-right">Pick agreement</th>
+                    <th className="px-3 py-2">{t.perf.colModel}</th>
+                    <th className="px-3 py-2">{t.perf.colVersion}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colN}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colModelAcc}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colMarketAcc}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colAgreement}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -139,19 +139,19 @@ export default function PerformancePage() {
           </section>
           <section className="space-y-2">
             <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400">
-              Batter model
+              {t.perf.batterHeading}
             </h2>
             {data.batter.length === 0 ? (
-              <p className="text-sm text-zinc-500">No graded predictions yet.</p>
+              <p className="text-sm text-zinc-500">{t.perf.noGraded}</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                   <tr>
-                    <th className="px-3 py-2">Version</th>
-                    <th className="px-3 py-2 text-right">N</th>
-                    <th className="px-3 py-2 text-right">Brier P(hit)</th>
-                    <th className="px-3 py-2 text-right">Brier P(HR)</th>
-                    <th className="px-3 py-2 text-right">MAE hits</th>
+                    <th className="px-3 py-2">{t.perf.colVersion}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colN}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colBrierHit}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colBrierHr}</th>
+                    <th className="px-3 py-2 text-right">{t.perf.colMaeHits}</th>
                   </tr>
                 </thead>
                 <tbody>

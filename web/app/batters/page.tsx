@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getJSON, fmtNum, fmtPct, today } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 type BatterPrediction = {
   game_pk: number;
@@ -22,6 +23,7 @@ type BatterPrediction = {
 };
 
 export default function BattersPage() {
+  const { t } = useLang();
   const [date, setDate] = useState(today());
   const [rows, setRows] = useState<BatterPrediction[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export default function BattersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Batter vs probable pitcher</h1>
+        <h1 className="text-lg font-semibold">{t.batters.title}</h1>
         <input
           type="date"
           value={date}
@@ -57,7 +59,7 @@ export default function BattersPage() {
             onChange={(e) => setGameFilter(e.target.value)}
             className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           >
-            <option value="all">all games</option>
+            <option value="all">{t.batters.allGames}</option>
             {matchups.map((m) => (
               <option key={m} value={m}>
                 {m}
@@ -67,24 +69,24 @@ export default function BattersPage() {
         )}
       </div>
       {error && (
-        <p className="text-sm text-zinc-500">No batter predictions for {date}.</p>
+        <p className="text-sm text-zinc-500">{t.batters.noneFor(date)}</p>
       )}
-      {!rows && !error && <p className="text-sm text-zinc-500">Loading…</p>}
+      {!rows && !error && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
       {rows && (
         <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
           <table className="w-full text-sm">
             <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
               <tr>
-                <th className="px-3 py-2">Batter</th>
-                <th className="px-3 py-2 text-right">Slot</th>
-                <th className="px-3 py-2">Game</th>
-                <th className="px-3 py-2">vs SP</th>
-                <th className="px-3 py-2 text-right">P(hit)</th>
-                <th className="px-3 py-2 text-right">P(HR)</th>
-                <th className="px-3 py-2 text-right">P(2+ TB)</th>
-                <th className="px-3 py-2 text-right">E[H]</th>
-                <th className="px-3 py-2 text-right">E[TB]</th>
-                <th className="px-3 py-2 text-right">E[K]</th>
+                <th className="px-3 py-2">{t.batters.colBatter}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colSlot}</th>
+                <th className="px-3 py-2">{t.batters.colGame}</th>
+                <th className="px-3 py-2">{t.batters.colVsSp}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colPHit}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colPHr}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colPTb2}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colEH}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colETb}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colEK}</th>
               </tr>
             </thead>
             <tbody>
@@ -101,7 +103,7 @@ export default function BattersPage() {
                     {r.away} @ {r.home}
                   </td>
                   <td className="px-3 py-2 text-zinc-500">
-                    {r.probable_pitcher ?? "TBD"}
+                    {r.probable_pitcher ?? t.common.tbd}
                   </td>
                   <td className="px-3 py-2 text-right">{fmtPct(r.p_hit)}</td>
                   <td className="px-3 py-2 text-right">{fmtPct(r.p_hr)}</td>

@@ -4,14 +4,8 @@ import { today } from "@/lib/api";
 
 export type WindowKey = "1m" | "2m" | "3m" | "season" | "2seasons" | "3seasons";
 
-export const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
-  { key: "1m", label: "Last month" },
-  { key: "2m", label: "Last two months" },
-  { key: "3m", label: "Last three months" },
-  { key: "season", label: "This season" },
-  { key: "2seasons", label: "Last two seasons" },
-  { key: "3seasons", label: "Last three seasons" },
-];
+// Labels live in lib/translations.ts (t.windows), keyed by these values.
+export const WINDOW_KEYS: WindowKey[] = ["1m", "2m", "3m", "season", "2seasons", "3seasons"];
 
 // Seasons start late March; March 1 is a safe season boundary. Before March,
 // "this season" means the previous year's season. Anchored to the site

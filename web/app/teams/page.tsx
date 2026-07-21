@@ -4,15 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getTeams, getTeamTrends, TeamRow, TeamTrends } from "@/lib/public-api";
 import { TeamTrendsChart } from "@/components/charts";
+import { useLang } from "@/lib/i18n";
 
-const TREND_STATS = [
-  { key: "runs_scored", label: "Runs scored" },
-  { key: "runs_allowed", label: "Runs allowed" },
-  { key: "run_diff", label: "Run difference" },
-  { key: "total_runs", label: "Total runs in their games" },
-];
+// Labels live in lib/translations.ts (t.teams.trendStats), keyed by these values.
+const TREND_STAT_KEYS = ["runs_scored", "runs_allowed", "run_diff", "total_runs"];
 
 export default function TeamsPage() {
+  const { t } = useLang();
   const [teams, setTeams] = useState<TeamRow[] | null>(null);
   const [selected, setSelected] = useState<string[]>(["PHI", "NYM"]);
   const [stat, setStat] = useState("runs_scored");
@@ -32,84 +30,81 @@ export default function TeamsPage() {
 
   const toggle = (ab: string) =>
     setSelected((cur) =>
-      cur.includes(ab) ? cur.filter((t) => t !== ab) : cur.length >= 6 ? cur : [...cur, ab],
+      cur.includes(ab) ? cur.filter((x) => x !== ab) : cur.length >= 6 ? cur : [...cur, ab],
     );
 
   const divisions = new Map<string, TeamRow[]>();
-  (teams ?? []).forEach((t) => {
-    const key = `${t.league} ${t.division}`;
-    divisions.set(key, [...(divisions.get(key) ?? []), t]);
+  (teams ?? []).forEach((row) => {
+    const key = `${row.league} ${row.division}`;
+    divisions.set(key, [...(divisions.get(key) ?? []), row]);
   });
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Teams</h1>
+      <h1 className="text-2xl font-bold">{t.teams.title}</h1>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Stat trends</h2>
-        <p className="text-sm text-zinc-500">
-          Pick up to six teams and a stat — the lines are 10-game rolling
-          averages across this season.
-        </p>
+        <h2 className="text-lg font-semibold">{t.teams.trendsTitle}</h2>
+        <p className="text-sm text-zinc-500">{t.teams.trendsSub}</p>
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={stat}
             onChange={(e) => setStat(e.target.value)}
             className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           >
-            {TREND_STATS.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.label}
+            {TREND_STAT_KEYS.map((key) => (
+              <option key={key} value={key}>
+                {t.teams.trendStats[key]}
               </option>
             ))}
           </select>
         </div>
         <div className="flex flex-wrap gap-1">
-          {(teams ?? []).map((t) => (
+          {(teams ?? []).map((row) => (
             <button
-              key={t.abbrev}
-              onClick={() => toggle(t.abbrev)}
+              key={row.abbrev}
+              onClick={() => toggle(row.abbrev)}
               className={`rounded border px-2 py-0.5 text-xs font-mono ${
-                selected.includes(t.abbrev)
+                selected.includes(row.abbrev)
                   ? "border-[var(--accent-mark)] font-semibold"
                   : "border-zinc-300 text-zinc-500 dark:border-zinc-700"
               }`}
               style={
-                selected.includes(t.abbrev)
+                selected.includes(row.abbrev)
                   ? { color: "var(--accent-text)" }
                   : undefined
               }
             >
-              {t.abbrev}
+              {row.abbrev}
             </button>
           ))}
         </div>
         {trends && trends.series.length > 0 && (
           <TeamTrendsChart
             series={trends.series}
-            statLabel={TREND_STATS.find((s) => s.key === stat)?.label ?? stat}
+            statLabel={t.teams.trendStats[stat] ?? stat}
           />
         )}
         {selected.length === 0 && (
-          <p className="text-sm text-zinc-500">Pick at least one team.</p>
+          <p className="text-sm text-zinc-500">{t.teams.pickOne}</p>
         )}
       </section>
 
-      <h2 className="text-lg font-semibold">Team pages</h2>
-      {!teams && <p className="text-sm text-zinc-500">Loading…</p>}
+      <h2 className="text-lg font-semibold">{t.teams.teamPages}</h2>
+      {!teams && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {[...divisions.entries()].map(([division, rows]) => (
           <div key={division}>
             <h2 className="mb-2 text-sm font-semibold text-zinc-500">{division}</h2>
             <ul className="space-y-1">
-              {rows.map((t) => (
-                <li key={t.team_id}>
+              {rows.map((row) => (
+                <li key={row.team_id}>
                   <Link
-                    href={`/teams/team?ab=${t.abbrev}`}
+                    href={`/teams/team?ab=${row.abbrev}`}
                     className="text-sm hover:text-[var(--accent-text)]"
                   >
-                    <span className="font-mono text-zinc-400">{t.abbrev}</span>{" "}
-                    {t.name}
+                    <span className="font-mono text-zinc-400">{row.abbrev}</span>{" "}
+                    {row.name}
                   </Link>
                 </li>
               ))}

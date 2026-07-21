@@ -86,6 +86,12 @@ then `aws s3 sync out s3://mlb-stats-site-583686634997 --delete` + CloudFront
 invalidation. To ship API changes: build `Dockerfile.api`, push to ECR
 `mlb-stats-api`, then `aws ecs update-service --force-new-deployment`.
 
+The site is bilingual (EN/JA, the hoopmodel pattern): every user-facing string
+lives in `web/lib/translations.ts` and is read via `useLang()` — never hardcode
+UI copy in a component. `en` defines the dictionary shape; `ja` is type-checked
+against it, so a missing translation is a build error. The file's header holds
+the Japanese style glossary.
+
 ```powershell
 .venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
 cd web; npm run dev                              # local frontend on :3000

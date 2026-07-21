@@ -5,6 +5,7 @@ import { Feed, getFeed, getSummary, Summary } from "@/lib/public-api";
 import { getJSON } from "@/lib/api";
 import { BatterDay, marketComparison, ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
+import { useLang } from "@/lib/i18n";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import { sinceDate, WindowKey } from "@/lib/windows";
 import {
@@ -19,6 +20,7 @@ import {
 } from "@/components/charts";
 
 export default function RecordPage() {
+  const { t } = useLang();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [feed, setFeed] = useState<Feed | null>(null);
   const [rows, setRows] = useState<ResultRow[] | null>(null);
@@ -56,11 +58,8 @@ export default function RecordPage() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">The track record</h1>
-          <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-            Every prediction gets graded against the final score — the good calls
-            and the bad ones. Nothing is deleted, nothing is cherry-picked.
-          </p>
+          <h1 className="text-2xl font-bold">{t.record.title}</h1>
+          <p className="mt-1 text-zinc-600 dark:text-zinc-400">{t.record.subtitle}</p>
         </div>
         <WindowSelect value={win} onChange={setWin} />
       </div>
@@ -69,52 +68,51 @@ export default function RecordPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <ProofChip
             metric={pctLabel(correct / view.length)}
-            line1="winners called"
-            line2={`${correct.toLocaleString()}–${(view.length - correct).toLocaleString()} over this window`}
+            line1={t.record.winnersCalled}
+            line2={t.record.wlOver(
+              t.common.wl(correct.toLocaleString(), (view.length - correct).toLocaleString()),
+            )}
           />
           <ProofChip
             metric={view.length.toLocaleString()}
-            line1="games graded"
-            line2={`since ${since}`}
+            line1={t.record.gamesGraded}
+            line2={t.record.since(since)}
           />
           <ProofChip
-            metric={marginMiss != null ? `±${marginMiss.toFixed(1)} runs` : "—"}
-            line1="average score miss"
+            metric={
+              marginMiss != null ? t.common.plusMinusRuns(marginMiss.toFixed(1)) : "—"
+            }
+            line1={t.record.avgScoreMiss}
             line2={
-              totalMissAvg != null ? `total-runs miss ±${totalMissAvg.toFixed(1)}` : undefined
+              totalMissAvg != null ? t.record.totalRunsMiss(totalMissAvg.toFixed(1)) : undefined
             }
           />
           <ProofChip
             metric={pctLabel(summary?.batter_hit_call_pct)}
-            line1="hitter calls right"
+            line1={t.record.hitterCallsRight}
             line2={
               summary
-                ? `"gets a hit tonight?" — ${summary.batter_calls_graded.toLocaleString()} graded, all time`
+                ? t.record.hitterCallsSub(summary.batter_calls_graded.toLocaleString())
                 : undefined
             }
           />
         </div>
       )}
       {rows && view.length === 0 && (
-        <p className="text-sm text-zinc-500">No graded games in this window yet.</p>
+        <p className="text-sm text-zinc-500">{t.record.noGraded}</p>
       )}
 
       {rows && view.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">The model vs the market</h2>
-          <p className="text-sm text-zinc-500">
-            The betting market&apos;s pregame line is the strongest public
-            prediction there is, so we grade ourselves against it on every game
-            where we have one. Lines are a benchmark only — the model never
-            sees them.
-          </p>
+          <h2 className="text-lg font-semibold">{t.record.marketTitle}</h2>
+          <p className="text-sm text-zinc-500">{t.record.marketSub}</p>
           {market && market.n >= 30 ? (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <ProofChip
                   metric={`${pctLabel(market.modelAcc)} vs ${pctLabel(market.marketAcc)}`}
-                  line1="winners called — us vs the market favorite"
-                  line2={`same ${market.n.toLocaleString()} games, this window`}
+                  line1={t.record.usVsMarket}
+                  line2={t.record.sameGames(market.n.toLocaleString())}
                 />
                 <ProofChip
                   metric={
@@ -122,19 +120,20 @@ export default function RecordPage() {
                       ? `±${market.modelTotalMiss.toFixed(1)} vs ±${market.marketTotalMiss.toFixed(1)}`
                       : "—"
                   }
-                  line1="total-runs miss — us vs the market's line"
+                  line1={t.record.totalsVsMarket}
                   line2={
                     market.totalsN
-                      ? `${market.totalsN.toLocaleString()} games with a total line`
+                      ? t.record.totalsGames(market.totalsN.toLocaleString())
                       : undefined
                   }
                 />
                 <ProofChip
-                  metric={`${market.disagreeWins.toLocaleString()}–${(
-                    market.disagreeN - market.disagreeWins
-                  ).toLocaleString()}`}
-                  line1="our picks against the market favorite"
-                  line2={`we called the upset ${market.disagreeN.toLocaleString()} times this window — this is how those calls went`}
+                  metric={t.common.wl(
+                    market.disagreeWins.toLocaleString(),
+                    (market.disagreeN - market.disagreeWins).toLocaleString(),
+                  )}
+                  line1={t.record.upsetPicks}
+                  line2={t.record.upsetSub(market.disagreeN.toLocaleString())}
                 />
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
@@ -142,31 +141,23 @@ export default function RecordPage() {
                 <TotalSkillCurveChart rows={view} />
               </div>
               <p className="text-xs text-zinc-400">
-                Pregame lines cover {market.n.toLocaleString()} of{" "}
-                {view.length.toLocaleString()} graded games in this window.
+                {t.record.linesCover(
+                  market.n.toLocaleString(),
+                  view.length.toLocaleString(),
+                )}
               </p>
             </>
           ) : (
-            <p className="text-sm text-zinc-500">
-              Only {market?.n ?? 0} game{(market?.n ?? 0) === 1 ? " has" : "s have"} a
-              stored pregame line in this window — we archive lines from 2023
-              onward and capture them daily. Pick a longer window to see the
-              head-to-head.
-            </p>
+            <p className="text-sm text-zinc-500">{t.record.fewLines(market?.n ?? 0)}</p>
           )}
         </section>
       )}
 
       {batterView.length > 15 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">The hitter calls</h2>
+          <h2 className="text-lg font-semibold">{t.record.hittersTitle}</h2>
           <p className="text-sm text-zinc-500">
-            The call that separates hitters is the home run, so that&apos;s the
-            one we lead with: every night the model names its five likeliest
-            hitters to go deep, and we grade the list against chance. The
-            &quot;gets a hit?&quot; call is graded too —{" "}
-            {batterCalls.toLocaleString()} calls in this window — but most
-            starters do get a hit, so it&apos;s the easier test.
+            {t.record.hittersBody(batterCalls.toLocaleString())}
           </p>
           <div className="grid gap-4 lg:grid-cols-2">
             <HrWatchCurveChart days={batterView} />
@@ -176,23 +167,24 @@ export default function RecordPage() {
       )}
 
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">The last three weeks, pick by pick</h2>
-        <p className="text-sm text-zinc-500">
-          One square per game, oldest to newest. Tap any square for the call
-          and the final score.
-        </p>
-        {feed ? <PicksStrip games={gradedGames} /> : <p className="text-sm text-zinc-500">Loading…</p>}
+        <h2 className="text-lg font-semibold">{t.record.threeWeeksTitle}</h2>
+        <p className="text-sm text-zinc-500">{t.record.threeWeeksSub}</p>
+        {feed ? <PicksStrip games={gradedGames} /> : <p className="text-sm text-zinc-500">{t.common.loading}</p>}
         {gradedGames.length > 0 && (
           <p className="text-sm text-zinc-500">
-            {gradedGames.filter((g) => g.correct).length}–
-            {gradedGames.filter((g) => !g.correct).length} over this stretch
+            {t.record.stretch(
+              t.common.wl(
+                gradedGames.filter((g) => g.correct).length.toLocaleString(),
+                gradedGames.filter((g) => !g.correct).length.toLocaleString(),
+              ),
+            )}
           </p>
         )}
       </section>
 
       {view.length > 100 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Under the hood</h2>
+          <h2 className="text-lg font-semibold">{t.record.underHoodTitle}</h2>
           <div className="grid gap-4 lg:grid-cols-2">
             <ConfidenceCurveChart rows={view} />
             <RocChart rows={view} />
@@ -202,16 +194,10 @@ export default function RecordPage() {
         </section>
       )}
       {view.length > 0 && view.length <= 100 && (
-        <p className="text-xs text-zinc-400">
-          Charts appear once a window has more than 100 graded games.
-        </p>
+        <p className="text-xs text-zinc-400">{t.record.chartsAppear}</p>
       )}
 
-      <p className="text-xs text-zinc-400">
-        The record includes the model's full backtest: for every past game the
-        model was trained only on games before it, then its prediction was
-        graded — the same rules it plays by every night now.
-      </p>
+      <p className="text-xs text-zinc-400">{t.record.backtestNote}</p>
     </div>
   );
 }

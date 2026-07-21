@@ -5,30 +5,33 @@ import { useSearchParams } from "next/navigation";
 import { today } from "@/lib/api";
 import { BattingGame, getPlayer, PitchingGame, PlayerDetail } from "@/lib/public-api";
 import { pctLabel } from "@/lib/copy";
+import { useLang } from "@/lib/i18n";
 import { poissonTail } from "@/lib/perf";
 import { ResultMark } from "@/components/shared";
 import { ClearCurveChart, GamePoint, PlayerCountingChart } from "@/components/charts";
 
+// Labels live in lib/translations.ts (t.playerDetail.batStats/pitStats/windows),
+// keyed by these stat keys.
 const BAT_STATS = [
-  { key: "h", label: "Hits", exp: "exp_h", max: 5 },
-  { key: "tb", label: "Total bases", exp: "exp_tb", max: 8 },
-  { key: "hr", label: "Home runs", exp: "exp_hr", max: 3 },
-  { key: "bb", label: "Walks", exp: "exp_bb", max: 4 },
-  { key: "k", label: "Strikeouts", exp: "exp_k", max: 5 },
-  { key: "rbi", label: "RBI", exp: null, max: 6 },
-  { key: "r", label: "Runs", exp: null, max: 4 },
+  { key: "h", exp: "exp_h", max: 5 },
+  { key: "tb", exp: "exp_tb", max: 8 },
+  { key: "hr", exp: "exp_hr", max: 3 },
+  { key: "bb", exp: "exp_bb", max: 4 },
+  { key: "k", exp: "exp_k", max: 5 },
+  { key: "rbi", exp: null, max: 6 },
+  { key: "r", exp: null, max: 4 },
 ] as const;
 
 const PIT_STATS = [
-  { key: "k", label: "Strikeouts", max: 12 },
-  { key: "er", label: "Earned runs", max: 8 },
-  { key: "innings", label: "Innings", max: 9 },
+  { key: "k", max: 12 },
+  { key: "er", max: 8 },
+  { key: "innings", max: 9 },
 ] as const;
 
 const WINDOWS = [
-  { key: "2w", label: "Last two weeks", days: 14 },
-  { key: "1m", label: "Last month", days: 31 },
-  { key: "season", label: "This season", days: 365 },
+  { key: "2w", days: 14 },
+  { key: "1m", days: 31 },
+  { key: "season", days: 365 },
 ] as const;
 
 function Tile({ label, value }: { label: string; value: string }) {
@@ -66,6 +69,7 @@ export default function PlayerPage() {
 }
 
 function PlayerContent() {
+  const { t } = useLang();
   const id = useSearchParams().get("id");
   const [player, setPlayer] = useState<PlayerDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -132,8 +136,8 @@ function PlayerContent() {
     return { empirical, model, values };
   }, [player, lineDef]);
 
-  if (error) return <p className="text-sm text-zinc-500">Player not found.</p>;
-  if (!player) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-zinc-500">{t.playerDetail.notFound}</p>;
+  if (!player) return <p className="text-sm text-zinc-500">{t.common.loading}</p>;
 
   const bs = player.batting?.season;
   const ps = player.pitching?.season;
@@ -150,16 +154,16 @@ function PlayerContent() {
 
       {bs && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Hitting — {bs.season}</h2>
+          <h2 className="text-lg font-semibold">{t.playerDetail.hitting(bs.season)}</h2>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-8">
-            <Tile label="Batting avg" value={avg3(bs.avg)} />
-            <Tile label="On-base" value={avg3(bs.obp)} />
-            <Tile label="Slugging" value={avg3(bs.slg)} />
-            <Tile label="OPS" value={avg3(bs.ops)} />
-            <Tile label="Home runs" value={`${bs.hr}`} />
-            <Tile label="RBI" value={`${bs.rbi}`} />
-            <Tile label="Steals" value={`${bs.sb}`} />
-            <Tile label="Games" value={`${bs.games}`} />
+            <Tile label={t.playerDetail.tiles.avg} value={avg3(bs.avg)} />
+            <Tile label={t.playerDetail.tiles.obp} value={avg3(bs.obp)} />
+            <Tile label={t.playerDetail.tiles.slg} value={avg3(bs.slg)} />
+            <Tile label={t.playerDetail.tiles.ops} value={avg3(bs.ops)} />
+            <Tile label={t.playerDetail.tiles.hr} value={`${bs.hr}`} />
+            <Tile label={t.playerDetail.tiles.rbi} value={`${bs.rbi}`} />
+            <Tile label={t.playerDetail.tiles.sb} value={`${bs.sb}`} />
+            <Tile label={t.playerDetail.tiles.games} value={`${bs.games}`} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -169,7 +173,7 @@ function PlayerContent() {
             >
               {BAT_STATS.map((s) => (
                 <option key={s.key} value={s.key}>
-                  {s.label}
+                  {t.playerDetail.batStats[s.key]}
                 </option>
               ))}
             </select>
@@ -180,22 +184,19 @@ function PlayerContent() {
             >
               {WINDOWS.map((w) => (
                 <option key={w.key} value={w.key}>
-                  {w.label}
+                  {t.playerDetail.windows[w.key]}
                 </option>
               ))}
             </select>
           </div>
-          <PlayerCountingChart points={batPoints} statLabel={batDef.label} />
+          <PlayerCountingChart points={batPoints} statLabel={t.playerDetail.batStats[batDef.key]} />
         </section>
       )}
 
       {bs && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Clearing a line</h2>
-          <p className="text-sm text-zinc-500">
-            Pick a stat and a number. Blue is how often {player.name.split(" ").pop()} has
-            cleared it this season; orange is the model's chance for the next game.
-          </p>
+          <h2 className="text-lg font-semibold">{t.playerDetail.clearTitle}</h2>
+          <p className="text-sm text-zinc-500">{t.playerDetail.clearSub(player.name)}</p>
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={lineStat}
@@ -207,11 +208,11 @@ function PlayerContent() {
             >
               {BAT_STATS.filter((s) => s.exp).map((s) => (
                 <option key={s.key} value={s.key}>
-                  {s.label}
+                  {t.playerDetail.batStats[s.key]}
                 </option>
               ))}
             </select>
-            <label className="text-sm text-zinc-500">at least</label>
+            <label className="text-sm text-zinc-500">{t.playerDetail.atLeast}</label>
             <input
               type="number"
               min={0}
@@ -222,18 +223,18 @@ function PlayerContent() {
             />
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Tile label="Games this season" value={`${clearData.values.length}`} />
+            <Tile label={t.playerDetail.gamesThisSeason} value={`${clearData.values.length}`} />
             <Tile
-              label="Average per game"
+              label={t.playerDetail.avgPerGame}
               value={
                 clearData.values.length
                   ? (clearData.values.reduce((a, b) => a + b, 0) / clearData.values.length).toFixed(2)
                   : "—"
               }
             />
-            <Tile label={`Cleared ${line}+ (season)`} value={pctLabel(overShare)} />
+            <Tile label={t.playerDetail.clearedTile(line)} value={pctLabel(overShare)} />
             <Tile
-              label={`Model, next game`}
+              label={t.playerDetail.modelNextGame}
               value={modelShare != null ? pctLabel(modelShare) : "—"}
             />
           </div>
@@ -241,22 +242,22 @@ function PlayerContent() {
             empirical={clearData.empirical}
             model={clearData.model}
             line={line}
-            statLabel={lineDef.label}
+            statLabel={t.playerDetail.batStats[lineDef.key]}
           />
         </section>
       )}
 
       {ps && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Pitching — {ps.season}</h2>
+          <h2 className="text-lg font-semibold">{t.playerDetail.pitching(ps.season)}</h2>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-7">
-            <Tile label="ERA" value={ps.era != null ? ps.era.toFixed(2) : "—"} />
-            <Tile label="WHIP" value={ps.whip != null ? ps.whip.toFixed(2) : "—"} />
-            <Tile label="K per 9" value={ps.k9 != null ? ps.k9.toFixed(1) : "—"} />
-            <Tile label="Strikeouts" value={`${ps.so}`} />
-            <Tile label="Innings" value={ps.ip.toFixed(1)} />
-            <Tile label="Starts" value={`${ps.starts}`} />
-            <Tile label="Games" value={`${ps.games}`} />
+            <Tile label={t.playerDetail.tiles.era} value={ps.era != null ? ps.era.toFixed(2) : "—"} />
+            <Tile label={t.playerDetail.tiles.whip} value={ps.whip != null ? ps.whip.toFixed(2) : "—"} />
+            <Tile label={t.playerDetail.tiles.k9} value={ps.k9 != null ? ps.k9.toFixed(1) : "—"} />
+            <Tile label={t.playerDetail.tiles.so} value={`${ps.so}`} />
+            <Tile label={t.playerDetail.tiles.ip} value={ps.ip.toFixed(1)} />
+            <Tile label={t.playerDetail.tiles.starts} value={`${ps.starts}`} />
+            <Tile label={t.playerDetail.tiles.games} value={`${ps.games}`} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -266,7 +267,7 @@ function PlayerContent() {
             >
               {PIT_STATS.map((s) => (
                 <option key={s.key} value={s.key}>
-                  {s.label}
+                  {t.playerDetail.pitStats[s.key]}
                 </option>
               ))}
             </select>
@@ -277,34 +278,34 @@ function PlayerContent() {
             >
               {WINDOWS.map((w) => (
                 <option key={w.key} value={w.key}>
-                  {w.label}
+                  {t.playerDetail.windows[w.key]}
                 </option>
               ))}
             </select>
           </div>
           <PlayerCountingChart
             points={pitPoints}
-            statLabel={PIT_STATS.find((s) => s.key === pitStat)!.label}
+            statLabel={t.playerDetail.pitStats[pitStat]}
           />
         </section>
       )}
 
       {player.batting && (
         <section className="space-y-2">
-          <h2 className="text-lg font-semibold">Recent games, our calls graded</h2>
+          <h2 className="text-lg font-semibold">{t.playerDetail.recentTitle}</h2>
           <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead className="bg-zinc-100 text-left dark:bg-zinc-900">
                 <tr>
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Game</th>
+                  <th className="px-3 py-2">{t.playerDetail.colDate}</th>
+                  <th className="px-3 py-2">{t.playerDetail.colGame}</th>
                   <th className="px-3 py-2 text-right">H</th>
                   <th className="px-3 py-2 text-right">HR</th>
                   <th className="px-3 py-2 text-right">TB</th>
                   <th className="px-3 py-2 text-right">BB</th>
                   <th className="px-3 py-2 text-right">K</th>
-                  <th className="px-3 py-2 text-right">We said (a hit)</th>
-                  <th className="px-3 py-2 text-right">Right?</th>
+                  <th className="px-3 py-2 text-right">{t.playerDetail.colSaidHit}</th>
+                  <th className="px-3 py-2 text-right">{t.playerDetail.colRight}</th>
                 </tr>
               </thead>
               <tbody>

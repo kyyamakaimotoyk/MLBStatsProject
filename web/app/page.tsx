@@ -104,11 +104,25 @@ export default function HomePage() {
                 .slice(0, 6)
                 .map((w) => (
                   <span key={`${w.game}-${w.name}`} className="text-zinc-600 dark:text-zinc-300">
-                    <span className="font-medium">{w.name}</span>{" "}
+                    {w.player_id ? (
+                      <Link
+                        href={`/players/detail?id=${w.player_id}`}
+                        className="font-medium text-[var(--accent-text)] hover:underline"
+                      >
+                        {w.name}
+                      </Link>
+                    ) : (
+                      <span className="font-medium">{w.name}</span>
+                    )}{" "}
                     <span className="text-zinc-400">({w.game})</span> ·{" "}
                     {t.home.toHomer(pctLabel(w.p_hr))}
                   </span>
                 ))}
+            </div>
+            <div className="mt-2">
+              <Link href="/batters" className="text-xs text-[var(--accent-text)] hover:underline">
+                {t.home.allHittersLink}
+              </Link>
             </div>
           </div>
         )}

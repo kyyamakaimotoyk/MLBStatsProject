@@ -165,7 +165,7 @@ def feed(days: int = Query(7, le=90)):
     if df.empty:
         raise HTTPException(404, "no games in window")
     batters = pd.read_sql(text(f"""
-        SELECT bp.game_pk, pl.full_name AS name, bp.p_hr, bp.exp_h, bp.p_hit
+        SELECT bp.game_pk, bp.player_id, pl.full_name AS name, bp.p_hr, bp.exp_h, bp.p_hit
         FROM batter_predictions bp
         JOIN players pl ON pl.player_id = bp.player_id
         JOIN games g ON g.game_pk = bp.game_pk

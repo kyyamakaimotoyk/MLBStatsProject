@@ -23,7 +23,9 @@ export type FeedGame = {
   pick: string;
   pick_chance: number;
   correct: boolean | null;
-  watch: { name: string; p_hr: number; exp_h: number; p_hit: number }[];
+  // player_id is optional so the page degrades to plain text if the API
+  // hasn't been redeployed with it yet.
+  watch: { player_id?: number; name: string; p_hr: number; exp_h: number; p_hit: number }[];
 };
 
 export type Feed = { days: { date: string; games: FeedGame[] }[] };

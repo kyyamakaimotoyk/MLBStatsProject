@@ -13,6 +13,7 @@ type BatterRow = {
   away: string;
   player_id: number;
   batter: string;
+  probable_pitcher_id?: number | null;
   probable_pitcher: string | null;
   p_hit: number | null;
   p_hr: number | null;
@@ -85,7 +86,12 @@ export default function PlayersPage() {
       </div>
 
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">{t.players.hitterBoardTitle}</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-lg font-semibold">{t.players.hitterBoardTitle}</h2>
+          <Link href="/batters" className="text-sm text-[var(--accent-text)] hover:underline">
+            {t.players.fullBoardLink}
+          </Link>
+        </div>
         <p className="text-sm text-zinc-500">{t.players.hitterBoardSub}</p>
         {!board && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
         {board && board.length === 0 && (
@@ -110,7 +116,7 @@ export default function PlayersPage() {
                     <td className="px-3 py-2 font-medium">
                       <Link
                         href={`/players/detail?id=${r.player_id}`}
-                        className="hover:text-[var(--accent-text)] hover:underline"
+                        className="text-[var(--accent-text)] hover:underline"
                       >
                         {r.batter}
                       </Link>
@@ -118,7 +124,18 @@ export default function PlayersPage() {
                     <td className="px-3 py-2 text-zinc-500">
                       {r.away} @ {r.home}
                     </td>
-                    <td className="px-3 py-2 text-zinc-500">{r.probable_pitcher ?? t.common.tbd}</td>
+                    <td className="px-3 py-2 text-zinc-500">
+                      {r.probable_pitcher_id && r.probable_pitcher ? (
+                        <Link
+                          href={`/players/detail?id=${r.probable_pitcher_id}`}
+                          className="text-[var(--accent-text)] hover:underline"
+                        >
+                          {r.probable_pitcher}
+                        </Link>
+                      ) : (
+                        r.probable_pitcher ?? t.common.tbd
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right font-medium">{pctLabel(r.p_hr)}</td>
                     <td className="px-3 py-2 text-right">{pctLabel(r.p_tb2)}</td>
                     <td className="px-3 py-2 text-right text-zinc-500">{pctLabel(r.p_hit)}</td>
@@ -162,7 +179,7 @@ export default function PlayersPage() {
                     <td className="px-3 py-2 font-medium">
                       <Link
                         href={`/players/detail?id=${r.pitcher_id}`}
-                        className="hover:text-[var(--accent-text)] hover:underline"
+                        className="text-[var(--accent-text)] hover:underline"
                       >
                         {r.pitcher}
                       </Link>

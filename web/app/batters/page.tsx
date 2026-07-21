@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { getJSON, fmtNum, fmtPct, today } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 
@@ -8,7 +9,9 @@ type BatterPrediction = {
   game_pk: number;
   home: string;
   away: string;
+  player_id: number;
   batter: string;
+  probable_pitcher_id?: number | null;
   probable_pitcher: string | null;
   lineup_slot: number | null;
   exp_pa: number | null;
@@ -95,7 +98,14 @@ export default function BattersPage() {
                   key={`${r.game_pk}-${r.batter}-${i}`}
                   className="border-t border-zinc-200 dark:border-zinc-800"
                 >
-                  <td className="px-3 py-2 font-medium">{r.batter}</td>
+                  <td className="px-3 py-2 font-medium">
+                    <Link
+                      href={`/players/detail?id=${r.player_id}`}
+                      className="text-[var(--accent-text)] hover:underline"
+                    >
+                      {r.batter}
+                    </Link>
+                  </td>
                   <td className="px-3 py-2 text-right text-zinc-500">
                     {r.lineup_slot ?? "—"}
                   </td>
@@ -103,7 +113,16 @@ export default function BattersPage() {
                     {r.away} @ {r.home}
                   </td>
                   <td className="px-3 py-2 text-zinc-500">
-                    {r.probable_pitcher ?? t.common.tbd}
+                    {r.probable_pitcher_id && r.probable_pitcher ? (
+                      <Link
+                        href={`/players/detail?id=${r.probable_pitcher_id}`}
+                        className="text-[var(--accent-text)] hover:underline"
+                      >
+                        {r.probable_pitcher}
+                      </Link>
+                    ) : (
+                      r.probable_pitcher ?? t.common.tbd
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">{fmtPct(r.p_hit)}</td>
                   <td className="px-3 py-2 text-right">{fmtPct(r.p_hr)}</td>

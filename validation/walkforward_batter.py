@@ -61,7 +61,7 @@ def _load_game_side_data():
     """), engine)
     players = pd.read_sql(text("SELECT player_id, bats, throws FROM players"), engine)
     actual_bat = pd.read_sql(text("""
-        SELECT game_pk, player_id, pa, h, tb, hr, bb, so AS k
+        SELECT game_pk, player_id, pa, h, tb, hr, bb, so AS k, rbi
         FROM batter_game_lines
     """), engine)
     # B7: the starter's actual line, for pitcher-level evaluation
@@ -105,6 +105,104 @@ def _load_game_side_data():
 
 B4_COLS = ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH")
 
+# ---- B8a (2026-07 cycle): slot-conditional expected RBI --------------------
+# rbar(outcome, slot) = shrunken mean RBI credited when class c occurs from
+# lineup slot s, W=300 toward the class-global mean; class-global falls back
+# to fixed era constants below 10k observed PAs (the ERA_PRIOR discipline —
+# never frame-derived when thin). exp_rbi = sum_c E[n_c] x rbar(c, slot).
+ERA_RBI_PRIOR = {"OUT": 0.025, "K": 0.0, "BB": 0.03, "HBP": 0.03,
+                 "1B": 0.30, "2B": 0.45, "3B": 0.50, "HR": 1.57}
+RBI_LEAGUE_PRIOR = 0.115   # league RBI per PA, era constant
+RBI_SHRINK_SLOT = 300.0
+RBI_SHRINK_BATTER = 150.0  # mirrors the batter model's overall shrinkage W
+RBI_CLASS_MIN_PA = 10_000
+
+
+def _load_rbi_events() -> pd.DataFrame:
+    """Starter PAs with credited RBIs, lineup slot, and outcome class — the
+    raw material for rbar(outcome, slot) and the marginal baseline. Pinch
+    hitters have no lineups row (slot NaN) and drop out of the slot table;
+    they are also outside the evaluated starter population."""
+    df = pd.read_sql(text("""
+        SELECT g.season, g.game_date, p.game_pk, p.batter_id, p.rbi,
+               p.event_type, l.batting_order AS slot
+        FROM plays p
+        JOIN games g USING (game_pk)
+        LEFT JOIN lineups l ON l.game_pk = p.game_pk AND l.player_id = p.batter_id
+        WHERE g.is_final
+    """), get_engine())
+    df["outcome"] = df["event_type"].map(bf.EVENT_MAP)
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["rbi"] = df["rbi"].fillna(0).astype(float)
+    return df.dropna(subset=["outcome"]).reset_index(drop=True)
+
+
+def _rbi_table(events: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """(rbar matrix [slot 0..9 x class], slot-marginal rbar [slot 0..9]) from
+    the given events — call with seasons strictly before the test season."""
+    ev = events.dropna(subset=["slot"])
+    ev = ev[ev["slot"].between(1, 9)].copy()
+    ev["slot"] = ev["slot"].astype(int)
+    g_class = ev.groupby("outcome")["rbi"].agg(["sum", "count"])
+    rbar_c = {}
+    for c in CLASSES:
+        if c in g_class.index and g_class.loc[c, "count"] >= RBI_CLASS_MIN_PA:
+            rbar_c[c] = float(g_class.loc[c, "sum"] / g_class.loc[c, "count"])
+        else:
+            rbar_c[c] = ERA_RBI_PRIOR[c]
+    g_cell = ev.groupby(["slot", "outcome"])["rbi"].agg(["sum", "count"])
+    mat = np.zeros((10, len(CLASSES)))
+    for s in range(1, 10):
+        for ci, c in enumerate(CLASSES):
+            if (s, c) in g_cell.index:
+                cell = g_cell.loc[(s, c)]
+                mat[s, ci] = ((cell["sum"] + RBI_SHRINK_SLOT * rbar_c[c])
+                              / (cell["count"] + RBI_SHRINK_SLOT))
+            else:
+                mat[s, ci] = rbar_c[c]
+    overall = float(ev["rbi"].sum() / max(len(ev), 1)) if len(ev) else RBI_LEAGUE_PRIOR
+    g_slot = ev.groupby("slot")["rbi"].agg(["sum", "count"])
+    slot_marg = np.full(10, overall)
+    for s in range(1, 10):
+        if s in g_slot.index:
+            cell = g_slot.loc[s]
+            slot_marg[s] = ((cell["sum"] + RBI_SHRINK_SLOT * overall)
+                            / (cell["count"] + RBI_SHRINK_SLOT))
+    return mat, slot_marg
+
+
+def _batter_rbi_lookup(events: pd.DataFrame):
+    """Batter's shrunken rolling RBI-per-PA as-of a date (last 60 games,
+    W=150 toward the expanding league rate) — the marginal baseline,
+    mirroring the batter model's own rate-feature construction. Point-in-time
+    via searchsorted; the game's own date is excluded."""
+    per_game = events.groupby(["batter_id", "game_pk", "game_date"], as_index=False) \
+        .agg(rbi=("rbi", "sum"), n=("rbi", "size")).sort_values("game_date")
+    daily = per_game.groupby("game_date")[["rbi", "n"]].sum()
+    ld = daily.index.to_numpy()
+    l_rbi = np.concatenate([[0.0], daily["rbi"].to_numpy(float).cumsum()])
+    l_n = np.concatenate([[0.0], daily["n"].to_numpy(float).cumsum()])
+    book = {}
+    for pid, grp in per_game.groupby("batter_id", sort=False):
+        book[pid] = (grp["game_date"].to_numpy(),
+                     np.concatenate([[0.0], grp["rbi"].to_numpy(float).cumsum()]),
+                     np.concatenate([[0.0], grp["n"].to_numpy(float).cumsum()]))
+
+    def lookup(pid, date64) -> float:
+        li = int(np.searchsorted(ld, date64, side="left"))
+        lg = l_rbi[li] / l_n[li] if l_n[li] > 50_000 else RBI_LEAGUE_PRIOR
+        entry = book.get(pid)
+        if entry is None:
+            return float(lg)
+        dates, crbi, cn = entry
+        hi = int(np.searchsorted(dates, date64, side="left"))
+        lo = max(0, hi - 60)
+        n = cn[hi] - cn[lo]
+        return float(((crbi[hi] - crbi[lo]) + RBI_SHRINK_BATTER * lg)
+                     / (n + RBI_SHRINK_BATTER))
+
+    return lookup
+
 
 def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         b4_compare: bool = False, seasons: tuple[int, ...] = TEST_SEASONS) -> None:
@@ -137,7 +235,11 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                                 # B7: per-starter absolute errors
                                 "spk_m", "spk_base", "spk_board", "spk_wsp",
                                 "spbb_m", "spbb_base", "spbb_wsp",
-                                "sph_m", "sph_base", "sph_wsp")}
+                                "sph_m", "sph_base", "sph_wsp",
+                                # B8a: expected-RBI absolute errors
+                                "rbi_m", "rbi_base", "rbi_slot")}
+    rbi_events = _load_rbi_events()
+    rbi_lookup = _batter_rbi_lookup(rbi_events)
     calib_hist = {"p_hit": [], "p_hr": [], "hit1": [], "hr1": []}
     feats_nob4 = [c for c in feats if c not in B4_COLS]
 
@@ -256,6 +358,24 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         p_b2[:, i_k] = k_blend
         agg_b2 = bm.aggregate_game(p_b2, pa_dist)
 
+        # ---- B8a: slot-conditional expected RBI (2026-07 cycle). rbar from
+        # seasons strictly before S (matching the model's own train split;
+        # the daily path will use full as-of, so the backtest understates
+        # live value — the safe direction).
+        rmat, rslot = _rbi_table(rbi_events[rbi_events["season"] < season])
+        slots8 = eligible["lineup_slot"].to_numpy(int)
+        exp_rbi = agg["exp_pa"] * (p_mix * rmat[slots8]).sum(axis=1)
+        exp_rbi_slot = agg["exp_pa"] * rslot[slots8]
+        b_rbi_rate = np.array([rbi_lookup(pid, d.to_datetime64())
+                               for pid, d in zip(eligible["player_id"],
+                                                 eligible["game_date"])])
+        exp_rbi_base = agg["exp_pa"] * b_rbi_rate
+        actual_rbi = eligible["rbi"].to_numpy(float)
+        m8 = ~np.isnan(actual_rbi)
+        pooled["rbi_m"].append(np.abs(actual_rbi - exp_rbi)[m8])
+        pooled["rbi_base"].append(np.abs(actual_rbi - exp_rbi_base)[m8])
+        pooled["rbi_slot"].append(np.abs(actual_rbi - exp_rbi_slot)[m8])
+
         # ---- B3: isotonic calibration of the probability heads, fit on the
         # PREVIOUS test season's predictions (walk-forward safe)
         cal = {}
@@ -329,6 +449,12 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         metrics["mae_spk_wsp"] = float(np.mean(np.abs(sp_g["sp_k"] - sp_g["wsp_k"])))
         metrics["mae_spbb_base"] = float(np.mean(np.abs(sp_g["sp_bb"] - sp_g["b_bb"])))
         metrics["mae_sph_base"] = float(np.mean(np.abs(sp_g["sp_h"] - sp_g["b_h"])))
+        # B8a expected RBI
+        metrics["mae_rbi"] = float(np.mean(np.abs(actual_rbi - exp_rbi)[m8]))
+        metrics["mae_rbi_base"] = float(np.mean(np.abs(actual_rbi - exp_rbi_base)[m8]))
+        metrics["mae_rbi_slot"] = float(np.mean(np.abs(actual_rbi - exp_rbi_slot)[m8]))
+        metrics["pred_rbi_mean"] = float(np.mean(exp_rbi[m8]))
+        metrics["obs_rbi_mean"] = float(np.mean(actual_rbi[m8]))
         log.info("season %d game-level: %s", season,
                  {k: round(v, 4) for k, v in metrics.items() if k.startswith(("mae", "brier"))})
 
@@ -350,14 +476,15 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
             for k in ("exp_pa", "exp_h", "exp_tb", "exp_hr", "exp_bb", "exp_k",
                       "p_hit", "p_hr", "p_tb2", "p_bb"):
                 rows[k] = agg[k]
+            rows["exp_rbi"] = exp_rbi
             insert = text("""
                 INSERT INTO batter_predictions
                     (game_pk, player_id, model_version, data_through_date, sp_id,
                      lineup_slot, exp_pa, exp_h, exp_tb, exp_hr, exp_bb, exp_k,
-                     p_hit, p_hr, p_tb2, p_bb)
+                     p_hit, p_hr, p_tb2, p_bb, exp_rbi)
                 VALUES (:game_pk, :player_id, :model_version, :data_through_date, :sp_id,
                         :lineup_slot, :exp_pa, :exp_h, :exp_tb, :exp_hr, :exp_bb, :exp_k,
-                        :p_hit, :p_hr, :p_tb2, :p_bb)
+                        :p_hit, :p_hr, :p_tb2, :p_bb, :exp_rbi)
                 ON CONFLICT (game_pk, player_id, model_version) DO UPDATE SET
                     data_through_date = EXCLUDED.data_through_date,
                     sp_id = EXCLUDED.sp_id, lineup_slot = EXCLUDED.lineup_slot,
@@ -366,6 +493,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                     exp_bb = EXCLUDED.exp_bb, exp_k = EXCLUDED.exp_k,
                     p_hit = EXCLUDED.p_hit, p_hr = EXCLUDED.p_hr,
                     p_tb2 = EXCLUDED.p_tb2, p_bb = EXCLUDED.p_bb,
+                    exp_rbi = EXCLUDED.exp_rbi,
                     created_at = now()
             """)
             records = rows.to_dict("records")
@@ -390,6 +518,16 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         t = ttest_rel((P[f"{head}_cal"] - P[y_key]) ** 2, (P[head] - P[y_key]) ** 2)
         print(f"  B3 isotonic, Brier {head}: {calb:.5f} vs {raw:.5f} "
               f"| paired-t p={t.pvalue:.4f} (2023 uncalibrated either way)")
+    if pooled["rbi_m"]:
+        n8 = len(np.concatenate(pooled["rbi_m"]))
+        print(f"\n=== B8a expected-RBI pooled paired verdicts ({n8} batter-games) ===")
+        for label, a_key, b_key in (
+                ("RBI: outcome-x-slot model vs batter-marginal", "rbi_m", "rbi_base"),
+                ("RBI: outcome-x-slot model vs slot-only", "rbi_m", "rbi_slot")):
+            a, b = np.concatenate(pooled[a_key]), np.concatenate(pooled[b_key])
+            t = ttest_rel(a, b)
+            print(f"  {label}: {a.mean():.4f} vs {b.mean():.4f} "
+                  f"| paired-t p={t.pvalue:.4f}")
     if len(pooled["spk_m"]):
         print(f"\n=== B7 starter heads, pooled paired verdicts "
               f"({len(np.concatenate(pooled['spk_m']))} starter-games) ===")

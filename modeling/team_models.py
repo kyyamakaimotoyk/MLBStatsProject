@@ -138,20 +138,31 @@ def _sigma(residuals: np.ndarray) -> float:
 
 
 class RunsModel:
-    """Two Poisson heads (home runs, away runs) on the shared feature row."""
+    """Two Poisson heads (home runs, away runs) on the shared feature row.
 
-    def __init__(self, family: str, seed: int = 0):
+    decay (E13, 2026-07 cycle): optional per-season recency weight
+    decay**(seasons_ago) applied as sample_weight — the cross-season-only
+    variant (Brown 2008 month-constancy + the alpha atlas argue against
+    within-season decay). lgbm/xgb families only."""
+
+    def __init__(self, family: str, seed: int = 0, decay: float | None = None):
         self.family = family
         self.seed = seed
+        self.decay = decay
         self.hyperparams = {"family": family, "structure": "runs_two_head",
+                            **({"season_decay": decay} if decay else {}),
                             **FAMILY_PARAMS[family]}
 
     def fit(self, train: pd.DataFrame, feats: list[str]) -> None:
         X = train[feats]
         self.head_home = _regressor(self.family, "count", self.seed)
         self.head_away = _regressor(self.family, "count", self.seed + 1)
-        self.head_home.fit(X, train["TARGET_HOME_RUNS"])
-        self.head_away.fit(X, train["TARGET_AWAY_RUNS"])
+        fit_kw = {}
+        if self.decay is not None:
+            seasons_ago = (train["season"].max() - train["season"]).to_numpy(float)
+            fit_kw["sample_weight"] = np.power(self.decay, seasons_ago)
+        self.head_home.fit(X, train["TARGET_HOME_RUNS"], **fit_kw)
+        self.head_away.fit(X, train["TARGET_AWAY_RUNS"], **fit_kw)
         pred_margin = self.head_home.predict(X) - self.head_away.predict(X)
         self.margin_sigma = _sigma(train["TARGET_MARGIN"].to_numpy() - pred_margin)
 
@@ -302,6 +313,10 @@ MODEL_TYPES = {
     "lgbm_direct": lambda seed=0: DirectModel("lgbm", seed),
     "xgb_runs": lambda seed=0: RunsModel("xgb", seed),
     "xgb_direct": lambda seed=0: DirectModel("xgb", seed),
+    # E13 (2026-07 cycle): cross-season recency weighting, decay grid per the
+    # Marcel-anchored 0.75-0.9 range; selection on 2023-2025 only
+    "lgbm_runs_d8": lambda seed=0: RunsModel("lgbm", seed, decay=0.8),
+    "lgbm_runs_d9": lambda seed=0: RunsModel("lgbm", seed, decay=0.9),
     # E8h model-family suite (hoopmodel pattern): RF / sklearn HGB / torch MLP
     # / ridge floor, same runs-two-head structure
     "rf_runs": lambda seed=0: RunsModel("rf", seed),

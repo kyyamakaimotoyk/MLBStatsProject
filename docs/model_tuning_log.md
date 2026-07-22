@@ -470,3 +470,102 @@ nine is predicted; /api/public/pitchers serves sp_exp_k/sp_exp_bb/sp_exp_h
 (daily_v1-preferred); the pitchers board now leads with starter-scoped
 K/BB/H instead of unlabeled whole-game lineup sums. Evaluation lives in
 walkforward_batter's pooled B7 verdicts.
+
+---
+
+## E11/E12 — 2026-07-22 — probability-head suite: log + hv confirmed, sk + iso rejected
+
+First experiments of the literature-driven cycle (roster + designs:
+docs/literature_review_2026-07.md). Enabled by the W0.1 harness extension
+(win_logloss/win_brier in walkforward metrics; paired per-game log-loss/Brier
+tests + --months slice in validation.ablation) — which immediately surfaced
+the motivating fact: **the base model's p_home is worse-calibrated than
+Elo's** (log loss .6836 vs .6816 pooled; market ≈ .676 from E0).
+
+**Hypothesis.** The documented "sigma runs hot" miscalibration is fixable by
+replacing/recalibrating Phi(margin/sigma_train) without touching picks or
+margins; the Karlis-Ntzoufras lambda3 identity predicts pure independent-heads
+Skellam is overconfident while a dispersion-corrected variance is right.
+
+**Setup.** validation/recalibrate.py: offline transforms over STORED
+lgbm_runs+8s predictions @v20260716_083741 (margins untouched -> ablation
+isolates the probability change), each fit per month on STRICTLY PRIOR months
+pooled (MIN_FIT 1,500 games, pass-through before that — fixes parked-E8c's
+in-sample-alpha flaw; the B3/B6 growing-history pattern). Variants: E11a iso
+(isotonic), E11b sig (OOS sigma), E11c log (logistic on sigma-scaled margin +
+logit of stored Elo p), E12a sk (Skellam, tie mass renormalized), E12b hv
+(p = Phi(margin/sqrt(c·(lam_h+lam_a))), c from prior OOS residuals). Seeds
+via the stored s1/s2 bases — no retraining anywhere.
+
+**Result (pooled, 8,713 games; log loss / Brier vs base .6836/.2452).**
+
+| variant | log loss | p | Brier | p | AUC delta | verdict |
+|---|---|---|---|---|---|---|
+| E12a sk | .6917 | <.0001 WORSE | .2487 | <.0001 WORSE | +.0003 (ns) | REJECTED — overdispersion+correlation make pure Skellam overconfident, exactly as predicted |
+| E11a iso | .6827 | .185 | .2448 | .208 | **−.0037 (p=.007) WORSE** | REJECTED — step function flattens ranking, no significant calibration gain |
+| E11b sig | .6832 | .015 | .2451 | .015 | .000 | confirmed s1 p=.047 / s2 p=.028 — real but smallest; superseded by hv/log |
+| E12b hv | .6830 | **.0009** | .2449 | **.0008** | +.0002 (ns) | **CONFIRMED** s1 p=.0047 / s2 p=.0025, direction never flips |
+| E11c log | .6813 | **.0071** | .2441 | **.0084** | +.0010 (ns) | **CONFIRMED** s1 p=.019 / s2 p=.008 — largest gain; full effect holds in the Mar–Jun slice (−.0027, p=.0077) |
+
+Diagnostic: hv's gain thins in Mar–Jun (p=.09) — the dispersion correction
+pays mostly in-season; log (which blends the better-calibrated Elo signal)
+carries the early-season window too.
+
+**Decision.** sk and iso are rejected and must not ship. sig/hv/log all clear
+the significance + multi-seed bar as pure probability-head improvements
+(picks, margins, totals untouched). **Ship candidate: log**, with the hv⊕log
+stack to be tested in the Wave-5 combined round before production wiring
+(bundle-carried calibrator at daily train time, the B6 cal_hit pattern; no
+model retrain involved). Registry rows: run_kind='offline_recalibration';
+stored tags lgbm_runs+{sk8,hv8,sig8,iso8,log8}[_s1|_s2].
+
+---
+
+## E13 — 2026-07-22 — cross-season recency weighting: REJECTED on the selection window
+
+**Hypothesis.** Environment-wide 2026 drift (Elo dips too) suggests
+down-weighting older seasons; grid decay^(seasons_ago), decay in {0.8, 0.9}
+(Marcel-anchored range), cross-season only — Brown 2008 (month-constant
+ability) and Glickman-Stern beta_w~1 both predict within-season decay adds
+nothing, so it was not run.
+
+**Setup.** RunsModel gains a decay param (sample_weight on both Poisson
+heads); tags lgbm_runs_d8+8s / lgbm_runs_d9+8s @v20260716_083741; selection
+on 2023-2025 pooled ONLY (E8d hygiene), 2026 held out.
+
+**Result.** Selection window (7,269 games): base acc .5654 vs d8 .5610 /
+d9 .5618 — the incumbent wins outright; margin MAE parity (3.4587 vs
+3.4563/3.4559), totals slightly worse. Pooled ablations null on all four
+metrics (acc p=.57/.55, margin p=.49/.27, totals p=.16/.49, AUC p=.66/.36).
+
+**Recorded observation (not actionable).** On the 2026 holdout alone both
+decays beat the base (.5512/.5478 vs .5402, +0.8..+1.1pp) — directionally
+consistent with the drift motivation, but selecting on the holdout is the
+exact violation the hygiene rule exists for. Revisit next cycle when 2026 is
+a complete season inside the selection window; do not ship on this.
+
+**Decision.** REJECTED; no decay ships; unweighted training stays.
+
+---
+
+## E10 — 2026-07-22 — lgbm+RF margin ensemble: NOT SHIPPED (seed gate)
+
+**Hypothesis.** The parked E8h RF margin-MAE edge (p=.043 single seed)
+survives as a 50/50 lgbm+RF margin average (totals stay lgbm; p_home via
+prior-months OOS sigma on the ensemble margin).
+
+**Setup.** validation/recalibrate.py rfens variant over stored predictions;
+seed pairs (lgbm_runs+8s, rf_runs+8s) x {seed0, s1, s2} — RF seed runs added
+for s1/s2. Tags lgbm_rf+ens8[_s1|_s2] @v20260716_083741.
+
+**Result.** Seed 0: margin MAE 3.4723 vs 3.4778 (p=.0009), Brier/log-loss
+p=.004/.003, AUC +.0017 (p=.058) — looked like a clear win. Seeds 1/2:
+margin MAE −.0017 (p=.31) / −.0026 (p=.11), all other metrics null.
+Direction consistent 3/3, magnitude collapses; the seed-0 pairing overstated
+the effect roughly 2-3x.
+
+**Decision.** NOT SHIPPED — fails the multi-seed significance gate exactly
+as the gate is designed to catch. Closed for this cycle; do not re-run
+without new information (more seasons, or an RF variant with a materially
+different bias profile). The consistent small directional edge is recorded;
+E8h's parked status resolves to REJECTED-for-shipping.

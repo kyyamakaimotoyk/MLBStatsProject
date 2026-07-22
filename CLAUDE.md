@@ -63,6 +63,7 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 # Daily pipeline (Phase 5) — ingest refresh + slate + all three products:
 .venv\Scripts\python -m orchestration.daily              # today
 .venv\Scripts\python -m orchestration.daily --date 2026-07-16 --skip-ingest
+.venv\Scripts\python -m orchestration.daily --scores-only   # same-day finals only
 .venv\Scripts\python scripts\track_performance.py        # outcomes vs predictions
 .venv\Scripts\python scripts\benchmark_odds.py           # models vs closing lines
 .venv\Scripts\python -m ingestion.odds_espn --date 2026-07-16   # manual line capture
@@ -107,8 +108,13 @@ Internal only — never surface this data on the public site.
 
 ## Automation (Phase 6)
 
-The daily pipeline runs on Fargate at 14:00 UTC via EventBridge Scheduler
-(`infra/schedule.tf`). Image: `Dockerfile.pipeline` -> ECR `mlb-stats-pipeline`.
+The pipeline runs on Fargate via EventBridge Scheduler (`infra/schedule.tf`),
+all UTC: the full daily run at 14:00; prediction refreshes at 18:00/21:00/23:00
+(posted lineups + late probables, upserting over the morning run); and
+same-day score refreshes at 20:00, 22:00, 00:00, 02:00, 04:00, 06:00
+(`orchestration.daily --scores-only` — imports finals only, so scores and
+pick grading reach the site the same evening).
+Image: `Dockerfile.pipeline` -> ECR `mlb-stats-pipeline`.
 To ship pipeline code changes:
 `docker build -f Dockerfile.pipeline -t mlb-stats-pipeline .` then tag/push to
 ECR (`:latest`). Logs: CloudWatch `/ecs/mlb-stats-pipeline`.

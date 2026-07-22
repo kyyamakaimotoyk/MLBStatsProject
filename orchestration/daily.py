@@ -19,6 +19,7 @@ staleness check.
 Usage:
     python -m orchestration.daily                  # today
     python -m orchestration.daily --date 2026-07-15 --skip-ingest
+    python -m orchestration.daily --scores-only    # same-day finals refresh
 """
 
 import argparse
@@ -165,6 +166,19 @@ def refresh_ingest(target_date: str) -> None:
     backfill_games.seed_range(start, end)
     backfill_games.run(workers=4, sleep=0.1)
     backfill_statcast.run(sleep=0.5)
+
+
+def refresh_scores(target_date: str) -> None:
+    """Same-day score refresh (the evening schedule): import any games that
+    have gone final through today, so results and pick grading reach the site
+    the same night instead of at the next morning run. Yesterday is included
+    for games that cross midnight ET. Games ledger only — a partially played
+    date must never enter the statcast_day ledger, or the next full run would
+    import an incomplete day and mark it done; the morning run seeds statcast
+    once the slate is complete."""
+    start = (pd.Timestamp(target_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    backfill_games.seed_range(start, target_date, seed_statcast=False)
+    backfill_games.run(workers=4, sleep=0.1)
 
 
 def fetch_slate(target_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -480,11 +494,21 @@ def summarize(slate, team_preds, batter_preds) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--date", default=str(pd.Timestamp.now().date()))
+    # Site clock is US Eastern (MLB's schedule date). The Fargate container
+    # runs UTC, where local "today" rolls to tomorrow at 8pm ET — mid-slate —
+    # so the default must be timezone-explicit, never Timestamp.now().
+    ap.add_argument("--date",
+                    default=str(pd.Timestamp.now(tz="America/New_York").date()))
     ap.add_argument("--skip-ingest", action="store_true")
+    ap.add_argument("--scores-only", action="store_true",
+                    help="import games that have gone final and exit")
     args = ap.parse_args()
     target = args.date
     asof = (pd.Timestamp(target) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if args.scores_only:
+        refresh_scores(target)
+        return
 
     if not args.skip_ingest:
         refresh_ingest(target)

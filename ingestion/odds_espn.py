@@ -76,6 +76,7 @@ def fetch_day(date: str) -> list[dict]:
         away_odds = o.get("awayTeamOdds") or {}
         rows.append({
             "start": ev.get("date"),
+            "state": ((ev.get("status") or {}).get("type") or {}).get("state"),
             "home_name": teams["home"].get("team", {}).get("displayName"),
             "away_name": teams["away"].get("team", {}).get("displayName"),
             "book": (o.get("provider") or {}).get("name", "unknown"),
@@ -114,7 +115,7 @@ def capture(date: str, closing: bool = False) -> int:
     for g in games.itertuples():
         assigned.setdefault((g.home_name, g.away_name), []).append(g.game_pk)
 
-    records, unmatched = [], []
+    records, unmatched, started = [], [], 0
     for row in sorted(espn, key=lambda r: r["start"] or ""):
         home = NAME_OVERRIDES.get(row["home_name"], row["home_name"])
         away = NAME_OVERRIDES.get(row["away_name"], row["away_name"])
@@ -123,6 +124,14 @@ def capture(date: str, closing: bool = False) -> int:
             unmatched.append(f"{away} @ {home}")
             continue
         game_pk = pks.pop(0)
+        # Non-closing captures store pregame lines only: once a game starts,
+        # ESPN swaps in live odds, and an in-game line is not a pregame
+        # benchmark (the reader-side [0.20, 0.85] plausibility guard can't
+        # catch all of it). The pk is popped above regardless, so the
+        # doubleheader zip stays aligned when game 1 is skipped.
+        if not closing and row.get("state") not in (None, "pre"):
+            started += 1
+            continue
         records.append({
             "game_pk": game_pk, "book": row["book"], "is_closing": closing,
             "ml_home": row["ml_home"], "ml_away": row["ml_away"],
@@ -134,6 +143,8 @@ def capture(date: str, closing: bool = False) -> int:
         })
     if unmatched:
         log.warning("%s: %d ESPN events unmatched: %s", date, len(unmatched), unmatched)
+    if started:
+        log.info("%s: skipped %d started/finished games (pregame lines only)", date, started)
     if records:
         with engine.begin() as conn:
             conn.execute(text("""

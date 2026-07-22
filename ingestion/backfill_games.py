@@ -143,15 +143,21 @@ def _month_chunks(start: str, end: str):
         cur = nxt + timedelta(days=1)
 
 
-def seed_range(start: str, end: str) -> None:
-    """Register all Final games (and their dates, for Statcast) in the ledger."""
+def seed_range(start: str, end: str, seed_statcast: bool = True) -> None:
+    """Register all Final games (and their dates, for Statcast) in the ledger.
+
+    seed_statcast=False for same-day score refreshes: a date may only enter
+    the statcast_day ledger once its slate is complete, or the next run would
+    import a partial day and mark it done.
+    """
     finals = []
     for chunk_start, chunk_end in _month_chunks(start, end):
         games = statsapi_client.schedule(chunk_start, chunk_end)
         finals += [g for g in games if g.get("status", {}).get("codedGameState") == "F"]
         log.info("schedule %s..%s: %d final games", chunk_start, chunk_end, len(finals))
     ledger.seed(SOURCE, sorted({g["gamePk"] for g in finals}))
-    ledger.seed("statcast_day", sorted({g["officialDate"] for g in finals}))
+    if seed_statcast:
+        ledger.seed("statcast_day", sorted({g["officialDate"] for g in finals}))
     log.info("ledger: %s | statcast_day: %s", ledger.counts(SOURCE), ledger.counts("statcast_day"))
 
 

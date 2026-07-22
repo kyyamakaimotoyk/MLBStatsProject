@@ -6,7 +6,7 @@
 import { CONSENT_DENIED_REGIONS, CONSENT_STORAGE_KEY } from "./consent";
 
 // Google Analytics: Admin -> Data streams -> web stream "Measurement ID".
-export const GA_MEASUREMENT_ID = "G-LLNJ436MX3"; // e.g. "G-XXXXXXXXXX"
+export const GA_MEASUREMENT_ID = "G-WJPRTDM1MM"; // e.g. "G-XXXXXXXXXX"
 
 // AdSense: Settings -> Account -> Account information "Publisher ID".
 // The same ID (minus the "ca-" prefix) goes in public/ads.txt.

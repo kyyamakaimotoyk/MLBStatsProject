@@ -5,15 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="97893cc2-d927-4e56-b225-534addae1b22" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/app/globals.css" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/globals.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/layout.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/page.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/app/record/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/record/page.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/app/sitemap.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/sitemap.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/lib/translations.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/lib/translations.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/lib/ads.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/lib/ads.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

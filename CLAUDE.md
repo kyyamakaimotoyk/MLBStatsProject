@@ -81,11 +81,16 @@ Model bundles live in S3 (`models/team_runs_latest.joblib`,
 
 Public site: **https://moundmodel.com** (S3+CloudFront static export) with the
 API at **https://api.moundmodel.com** (Fargate service behind an ALB).
-To ship site changes:
+Site changes ship automatically: any push to master touching `web/**` runs
+`.github/workflows/deploy-site.yml` (build with the prod API URL -> S3 sync ->
+CloudFront invalidation, via the OIDC role in `infra/deploy_ci.tf`). Manual
+fallback:
 `cd web; $env:NEXT_PUBLIC_API_URL="https://api.moundmodel.com"; npm run build`
 then `aws s3 sync out s3://mlb-stats-site-583686634997 --delete` + CloudFront
-invalidation. To ship API changes: build `Dockerfile.api`, push to ECR
-`mlb-stats-api`, then `aws ecs update-service --force-new-deployment`.
+invalidation — never deploy an `out/` from a plain `npm run build`
+(`web/.env.local` bakes in localhost). To ship API changes: build
+`Dockerfile.api`, push to ECR `mlb-stats-api`, then
+`aws ecs update-service --force-new-deployment`.
 
 The site is bilingual (EN/JA, the hoopmodel pattern): every user-facing string
 lives in `web/lib/translations.ts` and is read via `useLang()` — never hardcode

@@ -45,6 +45,12 @@ def _metrics(test: pd.DataFrame, preds: pd.DataFrame) -> dict[str, float]:
     }
     if 0 < win.sum() < len(win) and preds["p_home"].nunique() > 1:
         out["win_auc"] = float(roc_auc_score(win, preds["p_home"]))
+    p = preds["p_home"].to_numpy(float)
+    if np.isfinite(p).all():
+        w = win.astype(float)
+        p_clip = np.clip(p, 1e-6, 1 - 1e-6)
+        out["win_brier"] = float(np.mean((p - w) ** 2))
+        out["win_logloss"] = float(-np.mean(w * np.log(p_clip) + (1 - w) * np.log(1 - p_clip)))
     return out
 
 

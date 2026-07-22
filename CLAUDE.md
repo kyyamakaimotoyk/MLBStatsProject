@@ -49,6 +49,11 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python -m ingestion.backfill_statcast --limit 10
 .venv\Scripts\python -m ingestion.import_reference --chadwick
 
+# Umpire/officials track (2026-07 cycle, docs/literature_review_2026-07.md):
+.venv\Scripts\python scripts\backfill_officials.py --workers 8      # full crews from S3 GUMBO archive
+.venv\Scripts\python -m ingestion.import_retrosheet --start 1998 --end 2025  # historical crews + K/BB
+.venv\Scripts\python scripts\alpha_atlas.py     # per-stat reliability constants -> docs/alpha_atlas_*.md
+
 # Features (rebuild order: rating -> park -> features):
 .venv\Scripts\python -m features.team_rating
 .venv\Scripts\python -m features.park_factors

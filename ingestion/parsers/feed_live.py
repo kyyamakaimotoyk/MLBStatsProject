@@ -46,11 +46,20 @@ def parse(feed: dict) -> dict:
     game_info = gd.get("gameInfo", {})
     wind_speed, wind_dir = _wind(weather)
 
+    officials = [
+        {
+            "game_pk": game_pk,
+            "official_type": o.get("officialType"),
+            "official_id": o.get("official", {}).get("id"),
+            "official_name": o.get("official", {}).get("fullName"),
+        }
+        for o in ld.get("boxscore", {}).get("officials", [])
+        if o.get("officialType")
+    ]
     hp_umpire_id = hp_umpire_name = None
-    for official in ld.get("boxscore", {}).get("officials", []):
-        if official.get("officialType") == "Home Plate":
-            hp_umpire_id = official.get("official", {}).get("id")
-            hp_umpire_name = official.get("official", {}).get("fullName")
+    for o in officials:
+        if o["official_type"] == "Home Plate":
+            hp_umpire_id, hp_umpire_name = o["official_id"], o["official_name"]
             break
 
     game = {
@@ -205,6 +214,7 @@ def parse(feed: dict) -> dict:
         "game": game,
         "players": players,
         "probable": probable,
+        "officials": officials,
         "lineups": list(lineups_by_pid.values()),
         "batter_lines": list(batters_by_pid.values()),
         "pitcher_lines": list(pitchers_by_pid.values()),

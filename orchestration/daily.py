@@ -168,6 +168,59 @@ def refresh_ingest(target_date: str) -> None:
     backfill_statcast.run(sleep=0.5)
 
 
+def probe_officials(target_date: str) -> None:
+    """Pregame officials probe (2026-07 cycle, W0.2): capture umpire
+    assignments for today's not-yet-started games at every pipeline tick.
+    game_officials keeps the FIRST sighting's captured_at (ingestion.officials
+    upsert), so the ticks accumulate the empirical officials-post-time
+    distribution vs first_pitch_utc — the measurement the umpire serve-path
+    design (Wave 4) is gated on. Verified 2026-07-22: officials are absent
+    from the boxscore ~5h pregame, so pregame coverage is expected to come
+    from the late ticks only. Best-effort; never blocks the pipeline."""
+    from datetime import datetime, timezone
+
+    from ingestion import officials as officials_writer
+
+    tick = f"probe_{datetime.now(timezone.utc):%H}Z"
+
+    def _rows(pk: int, raw) -> list[dict]:
+        return [
+            {"game_pk": pk, "official_type": o.get("officialType"),
+             "official_id": o.get("official", {}).get("id"),
+             "official_name": o.get("official", {}).get("fullName")}
+            for o in (raw or []) if o.get("officialType")
+        ]
+
+    try:
+        games = statsapi_client.schedule(target_date, target_date, hydrate="officials")
+    except Exception as exc:
+        log.warning("officials probe: schedule fetch failed: %s", exc)
+        return
+    previews = [g for g in games
+                if g.get("status", {}).get("abstractGameState") == "Preview"]
+    found = 0
+    try:
+        with get_engine().begin() as conn:
+            for g in previews:
+                pk = g["gamePk"]
+                rows = _rows(pk, g.get("officials"))
+                source = f"{tick}_sched"
+                if not rows:
+                    try:
+                        rows = _rows(pk, statsapi_client.boxscore(pk).get("officials"))
+                        source = tick
+                    except Exception:
+                        continue
+                if rows:
+                    officials_writer.upsert(conn, rows, source=source)
+                    found += 1
+    except Exception as exc:
+        log.warning("officials probe failed: %s", exc)
+        return
+    log.info("officials probe %s: %d/%d preview games had officials posted",
+             tick, found, len(previews))
+
+
 def refresh_scores(target_date: str) -> None:
     """Same-day score refresh (the evening schedule): import any games that
     have gone final through today, so results and pick grading reach the site
@@ -505,6 +558,8 @@ def main() -> None:
     args = ap.parse_args()
     target = args.date
     asof = (pd.Timestamp(target) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    probe_officials(target)  # every tick, before any heavy work (best-effort)
 
     if args.scores_only:
         refresh_scores(target)

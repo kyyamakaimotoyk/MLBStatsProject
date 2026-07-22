@@ -34,6 +34,13 @@ def put_json_gz(key_suffix: str, obj: dict) -> str:
     return key
 
 
+def get_json_gz(key: str) -> dict:
+    """Read back an archived JSON object by its FULL key (as stored in the
+    ingest ledger's s3_key column — prefix already included)."""
+    obj = _s3().get_object(Bucket=os.environ["MLB_DATA_BUCKET"], Key=key)
+    return json.loads(gzip.decompress(obj["Body"].read()).decode("utf-8"))
+
+
 def put_text_gz(key_suffix: str, content: str, content_type: str = "text/csv") -> str:
     key = f"{os.getenv('MLB_RAW_PREFIX', 'raw/')}{key_suffix}"
     _s3().put_object(

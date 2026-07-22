@@ -64,6 +64,13 @@ def live_feed(game_pk: int) -> dict:
     return get_json(f"/api/v1.1/game/{game_pk}/feed/live")
 
 
+def boxscore(game_pk: int) -> dict:
+    """Boxscore only — a fraction of the GUMBO feed's size; carries the
+    officials array once assignments are posted. Used by the pregame
+    officials probe."""
+    return get_json(f"/api/v1/game/{game_pk}/boxscore")
+
+
 def teams(season: int) -> list[dict]:
     return get_json("/api/v1/teams", {"sportId": 1, "season": season}).get("teams", [])
 

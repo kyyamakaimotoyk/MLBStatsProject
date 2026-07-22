@@ -19,7 +19,7 @@ import requests
 from sqlalchemy import text
 
 from core.db import get_engine
-from ingestion import ledger, raw_archive, statsapi_client
+from ingestion import ledger, officials, raw_archive, statsapi_client
 from ingestion.parsers import feed_live
 
 log = logging.getLogger("backfill_games")
@@ -114,6 +114,7 @@ def _load_game(conn, parsed: dict) -> None:
         # overlapping player sets deadlock if their row order differs.
         conn.execute(_UPSERT_PLAYER, sorted(parsed["players"], key=lambda p: p["player_id"] or 0))
     conn.execute(_UPSERT_GAME, parsed["game"])
+    officials.upsert(conn, parsed.get("officials", []), source="feed")
     for key, table in _CHILD_TABLES.items():
         conn.execute(text(f"DELETE FROM {table} WHERE game_pk = :pk"), {"pk": game_pk})
         if parsed[key]:

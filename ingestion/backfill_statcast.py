@@ -53,6 +53,19 @@ COLUMNS = {
     "babip_value": "babip_value", "iso_value": "iso_value",
     "delta_run_exp": "delta_run_exp",
     "home_team": "home_team", "away_team": "away_team",
+    # B8b reprocess columns (migration 0012) — carried by the daily ingest
+    # from here on; historical days recovered by scripts/reprocess_statcast.py
+    "on_1b": "on_1b", "on_2b": "on_2b", "on_3b": "on_3b",
+    "bat_score": "bat_score", "fld_score": "fld_score",
+    "sz_top": "sz_top", "sz_bot": "sz_bot",
+    "hc_x": "hc_x", "hc_y": "hc_y",
+    "if_fielding_alignment": "if_fielding_alignment",
+    "of_fielding_alignment": "of_fielding_alignment",
+    "fielder_2": "fielder_2", "fielder_3": "fielder_3", "fielder_4": "fielder_4",
+    "fielder_5": "fielder_5", "fielder_6": "fielder_6", "fielder_7": "fielder_7",
+    "fielder_8": "fielder_8", "fielder_9": "fielder_9",
+    "launch_speed_angle": "launch_speed_angle",
+    "effective_speed": "effective_speed", "spin_axis": "spin_axis",
 }
 
 _INSERT = text(
@@ -95,6 +108,10 @@ def load_day(day: str, csv_text: str) -> int:
     if missing:
         log.warning("%s: columns missing from Savant CSV: %s", day, missing)
     df = df[keep].rename(columns=COLUMNS)
+    # era-dependent columns (spin_axis 2020+, alignments, ...) may be absent
+    # from older CSVs; the INSERT binds every target column, so absent ones
+    # must exist as NULLs rather than missing record keys
+    df = df.reindex(columns=list(COLUMNS.values()))
     df = df.dropna(subset=["game_pk", "at_bat_number", "pitch_number"])
     df = df.drop_duplicates(subset=["game_pk", "at_bat_number", "pitch_number"])
     for col in ("game_pk", "at_bat_number", "pitch_number"):

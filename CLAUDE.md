@@ -53,6 +53,8 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python scripts\backfill_officials.py --workers 8      # full crews from S3 GUMBO archive
 .venv\Scripts\python -m ingestion.import_retrosheet --start 1998 --end 2025  # historical crews + K/BB
 .venv\Scripts\python scripts\alpha_atlas.py     # per-stat reliability constants -> docs/alpha_atlas_*.md
+.venv\Scripts\python scripts\reprocess_statcast.py   # B8b: base-state/zone/fielder cols from S3 archive
+                                                     # (hours; never alongside a snapshot rebuild)
 
 # Features (rebuild order: rating -> park -> features):
 .venv\Scripts\python -m features.team_rating

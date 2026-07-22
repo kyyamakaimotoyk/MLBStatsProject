@@ -41,6 +41,12 @@ def get_json_gz(key: str) -> dict:
     return json.loads(gzip.decompress(obj["Body"].read()).decode("utf-8"))
 
 
+def get_text_gz(key: str) -> str:
+    """Read back an archived gzipped text object (CSV) by its FULL key."""
+    obj = _s3().get_object(Bucket=os.environ["MLB_DATA_BUCKET"], Key=key)
+    return gzip.decompress(obj["Body"].read()).decode("utf-8")
+
+
 def put_text_gz(key_suffix: str, content: str, content_type: str = "text/csv") -> str:
     key = f"{os.getenv('MLB_RAW_PREFIX', 'raw/')}{key_suffix}"
     _s3().put_object(

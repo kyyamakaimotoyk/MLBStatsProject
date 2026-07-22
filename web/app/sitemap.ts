@@ -16,5 +16,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: path === "" ? 1 : 0.7,
     })),
     { url: `${BASE}/about/`, changeFrequency: "monthly" as const, priority: 0.4 },
+    { url: `${BASE}/privacy/`, changeFrequency: "monthly" as const, priority: 0.2 },
   ];
 }

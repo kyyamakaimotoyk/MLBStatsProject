@@ -93,6 +93,14 @@ UI copy in a component. `en` defines the dictionary shape; `ja` is type-checked
 against it, so a missing translation is a build error. The file's header holds
 the Japanese style glossary.
 
+Monetization: the Google Analytics + AdSense IDs live in `web/lib/ads.ts`
+(empty string = integration off; the publisher ID also goes in
+`web/public/ads.txt`). Consent Mode v2 defaults to denied in the EEA/UK/CH —
+bootstrap script in `app/layout.tsx`, banner in `components/ConsentBanner.tsx`.
+Ads render only through `components/AdSlot.tsx`, whose frame heights are
+reserved in CSS (`.ad-frame`) so ads can never shift page content; the privacy
+policy lives at `/privacy` and is translated like everything else.
+
 ```powershell
 .venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
 cd web; npm run dev                              # local frontend on :3000

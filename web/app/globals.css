@@ -25,6 +25,19 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Reserved ad frames (components/AdSlot.tsx): the height is fixed here in CSS
+   so the space exists before any ad script runs — ads can never shift page
+   content. Keep these in sync with the fixed-height ad sizes AdSense serves
+   (90px desktop banner, 100px mobile). */
+.ad-frame {
+  height: 100px;
+}
+@media (min-width: 640px) {
+  .ad-frame {
+    height: 90px;
+  }
+}
+
 /* ---- Site-wide color tokens: ONE palette for UI and charts. ----
    Series pair validated per the dataviz six checks against both surfaces.
    Accent has two roles: -mark (fills, large metrics — the validated series

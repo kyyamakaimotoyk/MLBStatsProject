@@ -7,6 +7,7 @@ import { BatterDay, marketComparison, ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { useLang } from "@/lib/i18n";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
+import AdSlot from "@/components/AdSlot";
 import { sinceDate, WindowKey } from "@/lib/windows";
 import {
   BatterSkillCurveChart,
@@ -181,6 +182,8 @@ export default function RecordPage() {
           </p>
         )}
       </section>
+
+      <AdSlot placement="recordMid" />
 
       {view.length > 100 && (
         <section className="space-y-3">

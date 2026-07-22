@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { siteMeta } from "@/lib/copy";
 import { LanguageProvider } from "@/lib/i18n";
+import { googleBootstrapScript } from "@/lib/ads";
 import SiteHeader from "@/components/SiteHeader";
+import SiteFooter from "@/components/SiteFooter";
+import ConsentBanner from "@/components/ConsentBanner";
+import GoogleTags from "@/components/GoogleTags";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -42,12 +46,17 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+        {/* Consent Mode v2 defaults must run before any Google script loads. */}
+        <script dangerouslySetInnerHTML={{ __html: googleBootstrapScript() }} />
         <LanguageProvider>
           <SiteHeader />
           <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
             {children}
           </main>
+          <SiteFooter />
+          <ConsentBanner />
         </LanguageProvider>
+        <GoogleTags />
       </body>
     </html>
   );

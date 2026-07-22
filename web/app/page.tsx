@@ -8,6 +8,7 @@ import { ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { useLang } from "@/lib/i18n";
 import { PicksTable, ProofChip, WindowSelect } from "@/components/shared";
+import AdSlot from "@/components/AdSlot";
 import { daysBack, sinceDate, WindowKey } from "@/lib/windows";
 
 export default function HomePage() {
@@ -127,6 +128,8 @@ export default function HomePage() {
           </div>
         )}
       </section>
+
+      <AdSlot placement="homeMid" />
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -1,0 +1,5 @@
+# ads.txt for moundmodel.com — authorizes Google to sell this site's ad space.
+# After AdSense signup: replace pub-0000000000000000 below with the real
+# publisher ID (ADSENSE_CLIENT in web/lib/ads.ts without the "ca-" prefix)
+# and remove the leading "#".
+google.com, pub-8164683714910600, DIRECT, f08c47fec0942fa0

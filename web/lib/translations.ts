@@ -437,6 +437,74 @@ const en = {
     hoodBodyEnd: ", rebuilt cloud-native for baseball.",
   },
 
+  footer: {
+    privacy: "Privacy",
+    cookieSettings: "Cookie settings",
+  },
+
+  ads: {
+    label: "Advertisement",
+  },
+
+  consent: {
+    title: "Cookies & privacy.",
+    body:
+      "This site uses Google Analytics to understand how it's read, and Google AdSense ads to cover its costs. In the EEA, UK, and Switzerland these cookies stay off unless you opt in — if you decline, ads are shown non-personalized and analytics runs without cookies.",
+    acceptAll: "Accept all",
+    declineAll: "Essential only",
+    privacyLink: "Privacy policy",
+  },
+
+  privacy: {
+    title: "Privacy",
+    updated: (date: string) => `Last updated ${date}`,
+    intro:
+      "moundmodel.com is a personal side project run by Kai Y. This page explains what data the site touches, why, and the choices you have. The short version: the site shows the same content to everyone, has no accounts, builds no personal profiles, and uses Google services for exactly two things — understanding traffic and funding the site with ads.",
+    hostTitle: "Hosting & server logs",
+    hostBody:
+      "The site is served from Amazon Web Services (S3 + CloudFront). Like nearly every web server, CloudFront writes standard access logs — IP address, requested page, timestamp, and browser user agent. They're used only to operate the site and understand aggregate traffic, and are deleted automatically after 90 days.",
+    analyticsTitle: "Analytics (Google Analytics 4)",
+    analyticsBody:
+      "We use Google Analytics 4 to see which pages get read and roughly where visitors come from. In the EEA, the UK, and Switzerland, analytics cookies stay off until you opt in through the cookie banner (Google Consent Mode v2); if you decline, Google receives only cookieless, aggregate signals. You can also block Analytics entirely with the opt-out browser add-on linked below.",
+    adsTitle: "Advertising (Google AdSense)",
+    adsBody1:
+      "The site shows ads through Google AdSense to cover its running costs. Google and its partners may use advertising cookies to limit how often you see an ad and — where you've consented — to personalize the ads you see.",
+    adsBody2:
+      "In the EEA, the UK, and Switzerland, advertising cookies default to off: unless you accept them in the cookie banner, ads are served non-personalized. You can also manage ad personalization for your Google account at any time via the links below.",
+    consentTitle: "Your choices",
+    consentBody:
+      "Your cookie choice is stored in your own browser (localStorage, key “moundmodel-consent”) and applied on every visit. You can change it whenever you like:",
+    cookieSettings: "Open cookie settings",
+    linksTitle: "Learn more / opt out",
+    links: [
+      {
+        label: "How Google uses information from sites that use its services",
+        href: "https://policies.google.com/technologies/partner-sites",
+      },
+      {
+        label: "Google privacy policy",
+        href: "https://policies.google.com/privacy",
+      },
+      {
+        label: "Google Ads Settings — manage ad personalization",
+        href: "https://adssettings.google.com",
+      },
+      {
+        label: "Google Analytics opt-out browser add-on",
+        href: "https://tools.google.com/dlpage/gaoptout",
+      },
+      {
+        label: "More about interest-based ads (YourAdChoices)",
+        href: "https://optout.aboutads.info",
+      },
+    ],
+    contactTitle: "Contact",
+    contactBody:
+      "Questions about this policy or your data: yamamotokai518@gmail.com.",
+    changesBody:
+      "If how the site handles data changes, this page will be updated and the date above revised.",
+  },
+
   strip: {
     chipTitle: (away: string, home: string, pick: string, pct: string) =>
       `${away} @ ${home}: picked ${pick} (${pct})`,
@@ -866,6 +934,74 @@ const ja: Dict = {
       "モデルはPythonとLightGBM。8シーズン分の試合・打席・投球データはAWS上のPostgreSQLに保存しています。パイプラインはAWS Fargate上の定時バッチ処理として動き、このサイトは静的書き出ししたNext.jsのフロントエンドが小さなFastAPIサービスを読む構成です。データ取り込みからモデル、このページまで、システム全体が",
     hoodLink: "hoopmodel.com",
     hoodBodyEnd: "の後継として、野球向けにクラウドネイティブで作り直したものです。",
+  },
+
+  footer: {
+    privacy: "プライバシーポリシー",
+    cookieSettings: "Cookie設定",
+  },
+
+  ads: {
+    label: "広告",
+  },
+
+  consent: {
+    title: "Cookieとプライバシーについて。",
+    body:
+      "本サイトでは、閲覧状況の把握のためにGoogle アナリティクスを、運営費をまかなう広告表示のためにGoogle AdSenseを使用しています。EEA・英国・スイスでは、同意いただくまでこれらのCookieは無効のままです。同意されない場合も、広告は非パーソナライズで表示され、アクセス解析はCookieを使わずに行われます。",
+    acceptAll: "すべて同意する",
+    declineAll: "必要最小限のみ",
+    privacyLink: "プライバシーポリシー",
+  },
+
+  privacy: {
+    title: "プライバシーポリシー",
+    updated: (date: string) => `最終更新日：${date}`,
+    intro:
+      "moundmodel.com は Kai Y. が個人で運営するサイドプロジェクトです。このページでは、本サイトがどのようなデータを何のために扱うのか、そして閲覧者の皆さんが選べることを説明します。要点を先に述べると――本サイトは全員に同じ内容を表示し、アカウント登録はなく、個人プロファイルも作成しません。Googleのサービスを使うのは、アクセス状況の把握と広告表示の2つの目的だけです。",
+    hostTitle: "ホスティングとサーバーログ",
+    hostBody:
+      "本サイトは Amazon Web Services（S3 + CloudFront）から配信されています。一般的なWebサーバーと同様に、CloudFrontは標準的なアクセスログ（IPアドレス、閲覧ページ、時刻、ブラウザのユーザーエージェント）を記録します。これらはサイトの運営と全体的なアクセス傾向の把握のみに使用し、90日後に自動的に削除されます。",
+    analyticsTitle: "アクセス解析（Google アナリティクス 4）",
+    analyticsBody:
+      "どのページが読まれているか、どの地域からの訪問が多いかを把握するために Google アナリティクス 4 を使用しています。EEA・英国・スイスでは、Cookieバナーで同意いただくまで解析用Cookieは無効です（Google同意モード v2）。同意されない場合、GoogleにはCookieを使わない集計用の信号のみが送られます。下記リンクのオプトアウト用アドオンで、解析自体を完全にブロックすることもできます。",
+    adsTitle: "広告（Google AdSense）",
+    adsBody1:
+      "本サイトは、運営費をまかなうために Google AdSense による広告を表示しています。Googleとそのパートナーは、広告の表示回数の制御や、同意いただいた場合の広告のパーソナライズのために、広告用Cookieを使用することがあります。",
+    adsBody2:
+      "EEA・英国・スイスでは、広告用Cookieは初期状態で無効です。Cookieバナーで同意されない限り、広告は非パーソナライズで配信されます。Googleアカウントの広告設定（下記リンク）から、広告のパーソナライズをいつでも管理できます。",
+    consentTitle: "閲覧者の選択肢",
+    consentBody:
+      "Cookieに関する選択は、お使いのブラウザ内（localStorage、キー名「moundmodel-consent」）に保存され、次回以降の訪問にも適用されます。選択は次のボタンからいつでも変更できます。",
+    cookieSettings: "Cookie設定を開く",
+    linksTitle: "詳細・オプトアウト",
+    links: [
+      {
+        label: "Googleのサービスを使用するサイトから収集した情報のGoogleによる使用",
+        href: "https://policies.google.com/technologies/partner-sites",
+      },
+      {
+        label: "Googleプライバシーポリシー",
+        href: "https://policies.google.com/privacy",
+      },
+      {
+        label: "Google広告設定 — パーソナライズの管理",
+        href: "https://adssettings.google.com",
+      },
+      {
+        label: "Google アナリティクス オプトアウト アドオン",
+        href: "https://tools.google.com/dlpage/gaoptout",
+      },
+      {
+        label: "インタレストベース広告について（YourAdChoices）",
+        href: "https://optout.aboutads.info",
+      },
+    ],
+    contactTitle: "お問い合わせ",
+    contactBody:
+      "本ポリシーやデータの取り扱いに関するご質問は yamamotokai518@gmail.com までお寄せください。",
+    changesBody:
+      "データの取り扱いに変更があった場合は、このページを更新し、上記の日付を改訂します。",
   },
 
   strip: {

@@ -498,9 +498,6 @@ const en = {
         href: "https://optout.aboutads.info",
       },
     ],
-    contactTitle: "Contact",
-    contactBody:
-      "Questions about this policy or your data: yamamotokai518@gmail.com.",
     changesBody:
       "If how the site handles data changes, this page will be updated and the date above revised.",
   },
@@ -997,9 +994,6 @@ const ja: Dict = {
         href: "https://optout.aboutads.info",
       },
     ],
-    contactTitle: "お問い合わせ",
-    contactBody:
-      "本ポリシーやデータの取り扱いに関するご質問は yamamotokai518@gmail.com までお寄せください。",
     changesBody:
       "データの取り扱いに変更があった場合は、このページを更新し、上記の日付を改訂します。",
   },

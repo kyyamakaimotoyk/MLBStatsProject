@@ -64,8 +64,6 @@ export default function PrivacyContent() {
         </ul>
       </section>
 
-      {section(p.contactTitle, [p.contactBody])}
-
       <p className="text-xs text-zinc-400">{p.changesBody}</p>
     </div>
   );

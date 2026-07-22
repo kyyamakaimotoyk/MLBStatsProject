@@ -29,6 +29,12 @@ FEATURE_FLAGS: dict[str, bool] = {
     "arsenal_cross": False,   # B4: per-pitch-class quality x pitcher mix (parked)
     "travel": False,     # E8e: travel burden since last game (distance, TZ shift)
     "venue_env": False,  # E8f: rolling venue scoring environment
+    # 2026-07 cycle Wave 2 (docs/literature_review_2026-07.md):
+    "priors": False,        # E9a: prior-season team rates, kappa=2/3 shrunk
+    "priors_blend": False,  # E9b: n/(n+k) blend of season-to-date with prior
+    "pyth": False,          # E14: Pythagorean-expectation diff + Log5 p_home
+    "defense": False,       # B9a: team BABIP-against + xHits-saved
+    "lineup_xr": False,     # LINEUP_XR: Markov lineup expected runs
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
@@ -42,6 +48,12 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "arsenal_cross": ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_"),
     "travel": ("HOME_TRAVEL_", "AWAY_TRAVEL_", "DIFF_TRAVEL_"),
     "venue_env": ("VENUE_",),
+    "priors": ("HOME_PRIOR_", "AWAY_PRIOR_", "DIFF_PRIOR_"),
+    "priors_blend": ("HOME_BLEND_", "AWAY_BLEND_", "DIFF_BLEND_"),
+    "pyth": ("PYTH_", "LOG5_"),
+    "defense": ("HOME_DEF_", "AWAY_DEF_", "DIFF_DEF_"),
+    # more specific than the lineup prefixes, same trick as lineup_platoon
+    "lineup_xr": ("HOME_LINEUP_XR", "AWAY_LINEUP_XR", "DIFF_LINEUP_XR"),
 }
 
 # Feature families for the drop-one ablation profiles (E8a). Profile
@@ -53,7 +65,7 @@ _FORM_BASES = {"RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
                "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30",
                "N_PRIOR_GAMES", "REST_DAYS", "GAME_NUM"}
 FAMILIES = ("form", "sp", "bullpen", "lineup", "elo", "park", "weather",
-            "context", "travel")
+            "context", "travel", "priors", "defense")
 
 
 def _family(col: str) -> str:
@@ -64,6 +76,12 @@ def _family(col: str) -> str:
             break
     if base in _FORM_BASES:
         return "form"
+    # PYTH_/LOG5_ are season-strength aggregates with their own prior blend —
+    # grouped with the priors family, not form (form is a known diluter)
+    if base.startswith(("PRIOR_", "BLEND_")) or col.startswith(("PYTH_", "LOG5_")):
+        return "priors"
+    if base.startswith("DEF_"):
+        return "defense"
     if base.startswith("SP_"):
         return "sp"
     if base.startswith("BP_"):

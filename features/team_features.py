@@ -64,7 +64,14 @@ def _load_offense(max_date):
                COUNT(s.estimated_woba_using_speedangle) AS bbe,
                COUNT(*) FILTER (WHERE s.events IN ('strikeout', 'strikeout_double_play')) AS so,
                COUNT(*) FILTER (WHERE s.events = 'walk') AS bb,
-               COUNT(*) FILTER (WHERE s.events IS NOT NULL AND s.events <> '') AS pa
+               COUNT(*) FILTER (WHERE s.events IS NOT NULL AND s.events <> '') AS pa,
+               -- B9a defense inputs: balls in play (HR excluded, BABIP
+               -- convention), hits on BIP, and Statcast xBA on those BIP
+               COUNT(*) FILTER (WHERE s.estimated_ba_using_speedangle IS NOT NULL
+                                AND s.events <> 'home_run') AS bip,
+               COUNT(*) FILTER (WHERE s.events IN ('single', 'double', 'triple')) AS hits_bip,
+               SUM(s.estimated_ba_using_speedangle::float8)
+                   FILTER (WHERE s.events <> 'home_run') AS xba_num
         FROM statcast_pitches s
         JOIN games g ON g.game_pk = s.game_pk
         WHERE g.is_final
@@ -134,13 +141,27 @@ TEAM_ROLL_COLS = [
 ]
 
 
+def _attach_against(team_games: pd.DataFrame, offense: pd.DataFrame) -> pd.DataFrame:
+    """Merge the OPPOSING side's ball-in-play offense onto each team row —
+    the fielding team's defense inputs (B9a). Shared by the historical build
+    and the prediction path."""
+    against = offense.rename(columns={"bip": "bip_ag", "hits_bip": "hits_bip_ag",
+                                      "xba_num": "xba_ag"})
+    against["side"] = against["side"].map({"home": "away", "away": "home"})
+    return team_games.merge(
+        against[["game_pk", "side", "bip_ag", "hits_bip_ag", "xba_ag"]],
+        on=["game_pk", "side"], how="left")
+
+
 def _group_arrays(g: pd.DataFrame) -> dict:
     return {
         "dates": g["game_date"].to_numpy(),
         "rf": g["runs_for"].to_numpy(float),
         "ra": g["runs_against"].to_numpy(float),
+        "wins": (g["runs_for"] > g["runs_against"]).to_numpy(float),
         "nums": {c: g[c].fillna(0).to_numpy(float)
-                 for c in ("woba_num", "woba_den", "xwoba_num", "bbe", "so", "bb", "pa")},
+                 for c in ("woba_num", "woba_den", "xwoba_num", "bbe", "so", "bb", "pa",
+                           "bip_ag", "hits_bip_ag", "xba_ag")},
     }
 
 
@@ -164,6 +185,29 @@ def _window_stats(arr: dict, cut: int, asof) -> dict:
         row["K_PCT_L30"] = nums["so"][lo30:cut].sum() / pa if pa else np.nan
         row["BB_PCT_L30"] = nums["bb"][lo30:cut].sum() / pa if pa else np.nan
         row["REST_DAYS"] = min(float((asof - dates[cut - 1]) / DAY), 10.0)
+        # B9a defense: BABIP-against + xHits-saved (xBA minus actual hits per
+        # BIP; positive = the defense converts more than expected), L30 + season
+        for lo, tag in ((lo30, "_L30"), (0, "_SEASON")):
+            bip = nums["bip_ag"][lo:cut].sum()
+            hits = nums["hits_bip_ag"][lo:cut].sum()
+            xba = nums["xba_ag"][lo:cut].sum()
+            row[f"DEF_BABIP_AGAINST{tag}"] = hits / bip if bip else np.nan
+            row[f"DEF_XHITS_SAVED{tag}"] = (xba - hits) / bip if bip else np.nan
+        # season-to-date internals for the E9 prior blends and E14 Pyth/Log5 —
+        # underscore keys are never emitted as columns (not in SIDE_COLS)
+        pa_s = nums["pa"][:cut].sum()
+        wd_s = nums["woba_den"][:cut].sum()
+        be_s = nums["bbe"][:cut].sum()
+        rs, ra_ = arr["rf"][:cut].sum(), arr["ra"][:cut].sum()
+        row["_STD_RUNS_PG"] = arr["rf"][:cut].mean()
+        row["_STD_RA_PG"] = arr["ra"][:cut].mean()
+        row["_STD_WOBA"] = nums["woba_num"][:cut].sum() / wd_s if wd_s else np.nan
+        row["_STD_XWOBA_CON"] = nums["xwoba_num"][:cut].sum() / be_s if be_s else np.nan
+        row["_STD_K_PCT"] = nums["so"][:cut].sum() / pa_s if pa_s else np.nan
+        row["_STD_BB_PCT"] = nums["bb"][:cut].sum() / pa_s if pa_s else np.nan
+        row["_STD_WPCT"] = arr["wins"][:cut].mean()
+        row["_STD_PYTH"] = (rs * rs / (rs * rs + ra_ * ra_)
+                            if (rs or ra_) else np.nan)
     return row
 
 
@@ -187,6 +231,103 @@ def _team_rolling(team_games: pd.DataFrame, cross_season: bool = False) -> dict:
             row = _window_stats(arr, cut, arr["dates"][i])
             row["GAME_NUM"] = int(g["_game_num"].iat[i])
             out[(g["game_pk"].iat[i], team_id)] = row
+    return out
+
+
+# E9a/b + E14 (2026-07 cycle). Blend ballasts k in GAMES, converted from the
+# alpha atlas (docs/alpha_atlas_2026-07.md, ~38 PA/game): K_PCT 515 PA -> ~13,
+# BB_PCT 1265 PA -> ~33; wOBA/xwOBA-contact between (HIT k=2584 -> ~68, tempered
+# to 45 since wOBA mixes fast K/BB with slow contact); runs/wpct/pyth use the
+# design-review grid center 20. w = n/(n+k) on the season-to-date value.
+PRIOR_KAPPA = 2.0 / 3.0   # Elo's carryover constant, the E9a precedent
+BLEND_K = {"RUNS_PG": 20.0, "RA_PG": 20.0, "WOBA": 45.0, "XWOBA_CON": 45.0,
+           "K_PCT": 13.0, "BB_PCT": 33.0}
+_PRIOR_STATS = list(BLEND_K) + ["WPCT", "PYTH"]  # WPCT/PYTH stay internal (E14)
+
+
+def _prior_book(team_games: pd.DataFrame) -> dict:
+    """(team_id, season) -> the team's FULL PRIOR-SEASON rates, shrunk toward
+    that prior season's league mean with kappa=2/3 (E9a). Keyed by the season
+    the prior SERVES: book[(t, 2024)] holds shrunk 2023 rates. Seasons with no
+    prior season in the data (2019) are simply absent -> NaN downstream, never
+    a frame-derived fallback (the E5/ERA_PRIOR leakage lesson). Point-in-time
+    is structural: under a mid-season max_date cutoff, the partial season's
+    aggregates only ever serve NEXT-season rows, which the cutoff excludes."""
+    g = team_games
+    agg = g.groupby(["team_id", "season"]).agg(
+        rf=("runs_for", "sum"), ra=("runs_against", "sum"),
+        n=("runs_for", "size"), wins=("runs_for", lambda s: np.nan),  # placeholder
+        woba_num=("woba_num", "sum"), woba_den=("woba_den", "sum"),
+        xwoba_num=("xwoba_num", "sum"), bbe=("bbe", "sum"),
+        so=("so", "sum"), bb=("bb", "sum"), pa=("pa", "sum"))
+    agg["wins"] = g.assign(w=(g["runs_for"] > g["runs_against"]).astype(float)) \
+        .groupby(["team_id", "season"])["w"].sum()
+    agg = agg.reset_index()
+    agg["RUNS_PG"] = agg["rf"] / agg["n"]
+    agg["RA_PG"] = agg["ra"] / agg["n"]
+    agg["WOBA"] = agg["woba_num"] / agg["woba_den"].replace(0, np.nan)
+    agg["XWOBA_CON"] = agg["xwoba_num"] / agg["bbe"].replace(0, np.nan)
+    agg["K_PCT"] = agg["so"] / agg["pa"].replace(0, np.nan)
+    agg["BB_PCT"] = agg["bb"] / agg["pa"].replace(0, np.nan)
+    agg["WPCT"] = agg["wins"] / agg["n"]
+    agg["PYTH"] = agg["rf"] ** 2 / (agg["rf"] ** 2 + agg["ra"] ** 2)
+
+    lg = agg.groupby("season")[_PRIOR_STATS].mean()
+    book = {}
+    for r in agg.itertuples():
+        lg_row = lg.loc[r.season]
+        book[(r.team_id, r.season + 1)] = {
+            s: float(lg_row[s] + PRIOR_KAPPA * (getattr(r, s) - lg_row[s]))
+            for s in _PRIOR_STATS if not pd.isna(getattr(r, s))
+        }
+    return book
+
+
+def _prior_blend_vals(side_vals: dict, prior: dict | None) -> dict:
+    """PRIOR_*/BLEND_* columns for one side (E9a/E9b) + internal blended
+    strength for E14. Blend: w*season_to_date + (1-w)*prior, w = n/(n+k);
+    no prior (2019 / expansion oddities) -> PRIOR_* NaN and BLEND_* falls
+    back to the season-to-date value alone."""
+    out = {}
+    n = float(side_vals.get("N_PRIOR_GAMES") or 0)
+    for stat in BLEND_K:
+        pr = (prior or {}).get(stat, np.nan)
+        cur = side_vals.get(f"_STD_{stat}", np.nan)
+        cur = np.nan if cur is None else cur
+        out[f"PRIOR_{stat}"] = pr
+        w = n / (n + BLEND_K[stat])
+        if pd.isna(pr):
+            out[f"BLEND_{stat}"] = cur
+        elif pd.isna(cur) or n == 0:
+            out[f"BLEND_{stat}"] = pr
+        else:
+            out[f"BLEND_{stat}"] = w * cur + (1 - w) * pr
+    # E14 internals: blended win% and Pythagorean expectation (k=20 games)
+    for stat in ("WPCT", "PYTH"):
+        pr = (prior or {}).get(stat, np.nan)
+        cur = side_vals.get(f"_STD_{stat}", np.nan)
+        cur = np.nan if cur is None else cur
+        w = n / (n + 20.0)
+        if pd.isna(pr):
+            out[f"_S_{stat}"] = cur
+        elif pd.isna(cur) or n == 0:
+            out[f"_S_{stat}"] = pr
+        else:
+            out[f"_S_{stat}"] = w * cur + (1 - w) * pr
+    return out
+
+
+def _pyth_log5(home_vals: dict, away_vals: dict) -> dict:
+    """E14 game-level columns from the two sides' blended strengths."""
+    ph, pa_ = home_vals.get("_S_PYTH"), away_vals.get("_S_PYTH")
+    wh, wa = home_vals.get("_S_WPCT"), away_vals.get("_S_WPCT")
+    out = {"PYTH_EXP_DIFF": np.nan, "LOG5_P_HOME": np.nan}
+    if ph is not None and pa_ is not None and not (pd.isna(ph) or pd.isna(pa_)):
+        out["PYTH_EXP_DIFF"] = float(ph - pa_)
+    if wh is not None and wa is not None and not (pd.isna(wh) or pd.isna(wa)):
+        h = float(np.clip(wh, 0.2, 0.8))
+        a = float(np.clip(wa, 0.2, 0.8))
+        out["LOG5_P_HOME"] = h * (1 - a) / (h * (1 - a) + (1 - h) * a)
     return out
 
 
@@ -418,14 +559,22 @@ LINEUP_COLS = ["LINEUP_WOBA", "LINEUP_K_RATE", "LINEUP_BB_RATE",
                "LINEUP_HR_RATE", "LINEUP_XWOBA_CON", "LINEUP_SAMPLE_PA",
                "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA", "LINEUP_N_REG_OUT",
                "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
-               "LINEUP_SAME_HAND_SHARE"]
+               "LINEUP_SAME_HAND_SHARE",
+               "LINEUP_XR"]  # 2026-07 Wave 2, flag-gated 'lineup_xr'
+# 2026-07 cycle Wave 2 blocks (all flag-gated off by default)
+PRIOR_COLS = ["PRIOR_RUNS_PG", "PRIOR_RA_PG", "PRIOR_WOBA", "PRIOR_XWOBA_CON",
+              "PRIOR_K_PCT", "PRIOR_BB_PCT"]
+BLEND_COLS = ["BLEND_RUNS_PG", "BLEND_RA_PG", "BLEND_WOBA", "BLEND_XWOBA_CON",
+              "BLEND_K_PCT", "BLEND_BB_PCT"]
+DEF_COLS = ["DEF_BABIP_AGAINST_L30", "DEF_BABIP_AGAINST_SEASON",
+            "DEF_XHITS_SAVED_L30", "DEF_XHITS_SAVED_SEASON"]
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
     "SP_WOBA_AGAINST_L10", "SP_XWOBA_CON_AGAINST_L10", "SP_IP_PER_START_L10",
     "SP_DAYS_REST", "SP_THROWS_L",
     "TRAVEL_KM", "TRAVEL_TZ_DELTA",  # E8e, flag-gated 'travel'
-] + LINEUP_COLS
+] + PRIOR_COLS + BLEND_COLS + DEF_COLS + LINEUP_COLS
 DIFF_COLS = [
     "RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
@@ -435,12 +584,106 @@ DIFF_COLS = [
     "LINEUP_XWOBA_CON", "LINEUP_DEV_WOBA", "LINEUP_MISSING_WOBA",
     "LINEUP_N_REG_OUT", "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
     "LINEUP_SAME_HAND_SHARE",
-]
+    "LINEUP_XR",
+] + PRIOR_COLS + BLEND_COLS + DEF_COLS
 
 # Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
 WOBA_WEIGHTS = {"BB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
 SLOT_PA_WEIGHTS = {1: 4.65, 2: 4.55, 3: 4.43, 4: 4.33, 5: 4.22,
                    6: 4.11, 7: 3.99, 8: 3.87, 9: 3.75}
+
+# ---- LINEUP_XR (2026-07 Wave 2): 24-state Markov expected runs -------------
+# Bukiet 1997 structure with D'Esopo-Lefkowitz deterministic advancement:
+# out/K no advance; BB/HBP force; 1B scores 2nd+3rd, 1st->2nd; 2B scores
+# 2nd+3rd, 1st->3rd; 3B/HR clear. Known ~7% conservative bias (no steals,
+# errors, or advancement on outs) — acceptable for a relative feature.
+_XR_EVENTS = ("OUT", "K", "BB", "HBP", "1B", "2B", "3B", "HR")
+
+
+def _xr_tables():
+    """Per event: arrays over base-states 0..7 (bitmask 1st|2nd<<1|3rd<<2) of
+    (new_base_state, runs_scored)."""
+    tables = {}
+    for ev in _XR_EVENTS:
+        nb, runs = np.zeros(8, int), np.zeros(8, int)
+        for b in range(8):
+            b1, b2, b3 = b & 1, (b >> 1) & 1, (b >> 2) & 1
+            if ev in ("OUT", "K"):
+                nb[b], runs[b] = b, 0
+            elif ev in ("BB", "HBP"):
+                runs[b] = b1 & b2 & b3
+                nb[b] = 1 | ((b1 | b2) << 1) | (((b1 & b2) | b3) << 2)
+            elif ev == "1B":
+                runs[b] = b2 + b3
+                nb[b] = 1 | (b1 << 1)
+            elif ev == "2B":
+                runs[b] = b2 + b3
+                nb[b] = 2 | (b1 << 2)
+            elif ev == "3B":
+                runs[b], nb[b] = b1 + b2 + b3, 4
+            else:  # HR
+                runs[b], nb[b] = b1 + b2 + b3 + 1, 0
+        tables[ev] = (nb, runs)
+    return tables
+
+
+_XR_TABLES = _xr_tables()
+_XR_MAX_PA = 30
+
+
+def _markov_xr(slot_probs: list[np.ndarray]) -> float:
+    """Expected runs over nine innings for a batting order of nine, each an
+    8-vector of outcome probabilities ordered like _XR_EVENTS. The chain is
+    solved once per leadoff slot (E[runs | leadoff] + the next-leadoff
+    distribution), then nine innings chain the leadoff distribution forward."""
+    probs = []
+    for p in slot_probs:
+        p = np.clip(np.asarray(p, float), 0.0, None)
+        s = p.sum()
+        probs.append(p / s if s > 0 else np.full(8, 1 / 8))
+
+    exp_runs = np.zeros(9)
+    next_lead = np.zeros((9, 9))
+    for lead in range(9):
+        dist = np.zeros((3, 8))
+        dist[0, 0] = 1.0
+        for t in range(_XR_MAX_PA):
+            live = dist.sum()
+            if live < 1e-4:
+                break
+            p8 = probs[(lead + t) % 9]
+            new = np.zeros((3, 8))
+            absorbed = 0.0
+            for ei, ev in enumerate(_XR_EVENTS):
+                pe = p8[ei]
+                if pe <= 0:
+                    continue
+                nb, runs = _XR_TABLES[ev]
+                if ev in ("OUT", "K"):
+                    for o in range(3):
+                        mass = dist[o] * pe
+                        if o < 2:
+                            new[o + 1] += mass
+                        else:
+                            absorbed += mass.sum()
+                else:
+                    for o in range(3):
+                        mass = dist[o] * pe
+                        exp_runs[lead] += float((mass * runs).sum())
+                        np.add.at(new[o], nb, mass)
+            next_lead[lead, (lead + t + 1) % 9] += absorbed
+            dist = new
+        leftover = dist.sum()  # chain cap: treat as inning over, no more runs
+        if leftover > 0:
+            next_lead[lead, (lead + _XR_MAX_PA) % 9] += leftover
+
+    lead_dist = np.zeros(9)
+    lead_dist[0] = 1.0
+    total = 0.0
+    for _ in range(9):
+        total += float(lead_dist @ exp_runs)
+        lead_dist = lead_dist @ next_lead
+    return total
 
 
 def _lineup_strength(max_date) -> dict:
@@ -471,6 +714,10 @@ def _lineup_strength(max_date) -> dict:
                        for c, wt in WOBA_WEIGHTS.items()))
           for d in b["game_date"].unique()}
     b["woba_dev"] = b["woba"] - b["game_date"].map(lg)
+    # league 8-class vector per date, for filling LINEUP_XR's missing slots
+    lg_vec = {pd.Timestamp(d): np.array([prior(d)[CLASSES.index(c)]
+                                         for c in _XR_EVENTS])
+              for d in b["game_date"].unique()}
 
     # as-of lookup: a player's latest deviation strictly before a date
     dev_book = {}
@@ -544,6 +791,20 @@ def _lineup_strength(max_date) -> dict:
             row["LINEUP_VS_HAND_WOBA"] = np.nan
             row["LINEUP_VS_HAND_DEV"] = np.nan
             row["LINEUP_SAME_HAND_SHARE"] = np.nan
+        # LINEUP_XR (flag-gated 'lineup_xr'): Markov expected runs of the
+        # posted nine; slots missing shrunken rates fall back to the league
+        # vector at that date
+        vec = lg_vec.get(pd.Timestamp(grp["game_date"].iloc[0]))
+        if vec is not None:
+            rate_cols = [f"B_rate_{c}" for c in _XR_EVENTS]
+            by_slot = {}
+            for slot, rates in zip(grp["batting_order"], grp[rate_cols].to_numpy()):
+                if not np.isnan(rates).any():
+                    by_slot[int(slot)] = rates
+            row["LINEUP_XR"] = _markov_xr(
+                [by_slot.get(s, vec) for s in range(1, 10)])
+        else:
+            row["LINEUP_XR"] = np.nan
         out[(game_pk, team_id)] = row
 
     # E5b missing-regular indicator: regulars = >=60% of the team's previous
@@ -600,7 +861,9 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     team_games = pd.concat(side_rows, ignore_index=True).merge(
         offense, on=["game_pk", "side"], how="left"
     )
+    team_games = _attach_against(team_games, offense)
     team_roll = _team_rolling(team_games, cross_season=cross_season)
+    prior_book = _prior_book(team_games)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
     lineup = _lineup_strength(max_date)
@@ -658,6 +921,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             row["ELO_P_HOME"] = r["p_home"]
 
         prob = probables.loc[g.game_pk] if g.game_pk in probables.index else None
+        side_dicts = {}
         for side in ("home", "away"):
             prefix = side.upper() + "_"
             team_id = g.home_team_id if side == "home" else g.away_team_id
@@ -666,6 +930,8 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             side_vals.update(lineup.get((g.game_pk, team_id), {}))
             side_vals.update(travel(team_id, g.season,
                                     g.game_date.to_datetime64(), g.venue_id))
+            side_vals.update(_prior_blend_vals(
+                side_vals, prior_book.get((team_id, g.season))))
             pid = prob[f"{side}_pitcher_id"] if prob is not None else None
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1
@@ -675,6 +941,8 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
                 side_vals["SP_KNOWN"] = 0
             for col in SIDE_COLS:
                 row[prefix + col] = side_vals.get(col)
+            side_dicts[side] = side_vals
+        row.update(_pyth_log5(side_dicts["home"], side_dicts["away"]))
         for col in DIFF_COLS:
             h, a = row.get("HOME_" + col), row.get("AWAY_" + col)
             row["DIFF_" + col] = (h - a) if h is not None and a is not None else None
@@ -753,6 +1021,16 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame,
             vals["LINEUP_VS_HAND_DEV"] = np.nan
             vals["LINEUP_SAME_HAND_SHARE"] = np.nan
 
+        # LINEUP_XR, serve path — league vector fills missing slots
+        lg_vec8 = league.to_numpy(float)
+        rate_cols = [f"B_rate_{c}" for c in _XR_EVENTS]
+        by_slot = {}
+        for slot, rates in zip(rows["lineup_slot"], rows[rate_cols].to_numpy()):
+            if not np.isnan(rates).any():
+                by_slot[int(slot)] = rates
+        vals["LINEUP_XR"] = _markov_xr([by_slot.get(s, lg_vec8)
+                                        for s in range(1, 10)])
+
         team_hist = hist[hist["team_id"] == team_id]
         recent = (team_hist.groupby(["game_pk", "game_date"])["player_id"].agg(set)
                   .reset_index().sort_values(["game_date", "game_pk"]).tail(15))
@@ -806,8 +1084,10 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
         side_rows.append(part)
     team_games = pd.concat(side_rows, ignore_index=True).merge(
         offense, on=["game_pk", "side"], how="left")
+    team_games = _attach_against(team_games, offense)
 
     team_at = _team_date_lookup(team_games)
+    prior_book = _prior_book(team_games)
     sp = _sp_lookup(starts)
     bp = _bullpen_lookup(bullpen)
     travel = _travel_lookup(games)
@@ -853,6 +1133,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             "ELO_HOME": rh, "ELO_AWAY": ra,
             "ELO_DIFF": rh - ra, "ELO_P_HOME": p_home,
         }
+        side_dicts = {}
         for side in ("home", "away"):
             prefix = side.upper() + "_"
             team_id = g.home_team_id if side == "home" else g.away_team_id
@@ -861,6 +1142,8 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             side_vals.update(lineup_vals.get((g.game_pk, team_id), {}))
             side_vals.update(travel(team_id, g.season,
                                     game_date.to_datetime64(), g.venue_id))
+            side_vals.update(_prior_blend_vals(
+                side_vals, prior_book.get((team_id, g.season))))
             pid = getattr(g, f"{side}_probable_id")
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1
@@ -870,6 +1153,8 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
                 side_vals["SP_KNOWN"] = 0
             for col in SIDE_COLS:
                 row[prefix + col] = side_vals.get(col)
+            side_dicts[side] = side_vals
+        row.update(_pyth_log5(side_dicts["home"], side_dicts["away"]))
         for col in DIFF_COLS:
             h, a = row.get("HOME_" + col), row.get("AWAY_" + col)
             row["DIFF_" + col] = (h - a) if h is not None and a is not None else None

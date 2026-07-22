@@ -1,0 +1,53 @@
+# Builds the static site and ships it to S3 + CloudFront whenever web/ changes
+# on master. Auth is OIDC (infra/deploy_ci.tf role) — no AWS keys in GitHub.
+# API/pipeline Docker images are NOT covered here; those still ship manually
+# (see CLAUDE.md).
+
+name: Deploy site
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - ".github/workflows/deploy-site.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# A newer push supersedes an in-flight deploy of older code.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.moundmodel.com
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::583686634997:role/mlb-stats-site-deploy
+          aws-region: us-east-1
+
+      - run: aws s3 sync out s3://mlb-stats-site-583686634997 --delete
+
+      - run: aws cloudfront create-invalidation --distribution-id EESXDVLXZC508 --paths "/*"

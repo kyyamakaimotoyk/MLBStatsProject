@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { siteMeta } from "@/lib/copy";
 import { LanguageProvider } from "@/lib/i18n";
-import { googleBootstrapScript } from "@/lib/ads";
+import { ADSENSE_CLIENT, googleBootstrapScript } from "@/lib/ads";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import ConsentBanner from "@/components/ConsentBanner";
@@ -33,6 +33,12 @@ export const metadata: Metadata = {
     title: `${siteMeta.title} — nightly MLB predictions, scored in public`,
     description: siteMeta.subtitle,
   },
+  // AdSense site verification: the loader script is injected post-hydration,
+  // which Google's crawler can't see — this server-rendered meta tag is what
+  // it verifies ownership against.
+  ...(ADSENSE_CLIENT
+    ? { other: { "google-adsense-account": ADSENSE_CLIENT } }
+    : {}),
 };
 
 export default function RootLayout({

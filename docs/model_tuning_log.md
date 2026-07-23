@@ -642,3 +642,37 @@ SP quality — SP features carry picks and are noisiest exactly early-season),
 the Wave-5 hv(+)log probability ship, and the umpire/totals track. Do not
 revisit E9-style team-rate priors without a structurally different
 information source (e.g., roster-projection-based priors).
+
+---
+
+## E15 — 2026-07-23 — in-house Stuff/Location/Pitching SP quality: picks null, totals parked
+
+**Setup.** Per-pitch LightGBM run-value models (target delta_run_exp;
+physical / location / combined input blocks), each season scored strictly by
+prior-season models -> pitch_stuff_games (0014; 128k pitcher-games 2020-2026,
+per-season mean RV -0.0014..-0.0019 runs/pitch). Feature columns SP_STUFF_RV/
+SP_LOC_RV/SP_PITCH_RV = as-of means over the trailing ~1,500 scored pitches
+(min 80), window crossing season boundaries by design. Snapshot
+v20260723_030056 (17,070 x 177, leakage PASS via the gated build chain);
+tag +stuff8, cross-snapshot ablation vs lgbm_runs+8s.
+
+**Result (8,713 paired; slice 5,019).** Picks: NULL everywhere — pooled acc
+-.33pp (p=.30), AUC -.0004 (p=.80); Mar-Jun acc -.28pp (p=.55), AUC -.003
+(p=.25). The early-season process-quality thesis does not appear: whatever
+the SP results-rates lack in April, the trees do not recover it from
+physical pitch quality either. Totals: **3.5281 vs 3.5331 (p=.070)** — the
+strongest totals direction this cycle, not significant.
+
+**Decision.** REJECTED for picks; flag stays off. PARKED for totals at
+p=.07 (single run, no seed spend on a non-significant result — the E3
+lesson about chasing directional totals effects is fresh). Revisit exactly
+once: in the Wave-5 combined totals check, or when the umpire serve path
+lands and the totals candidates run together. v2 (spin_axis, extension-era
+inputs from the B8b reprocess) is the other legitimate reopening.
+
+**Cycle reading.** With E15, every literature-derived pick-side feature
+lever is now exhausted: the Elo+SP-results linear core is saturated, and
+the market's remaining March-June edge is not reachable from public
+team/pitcher performance data of any flavor tried this cycle. The
+probability head (E11c log, confirmed) remains the cycle's shippable
+team-side win.

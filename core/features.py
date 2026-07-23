@@ -35,6 +35,7 @@ FEATURE_FLAGS: dict[str, bool] = {
     "pyth": False,          # E14: Pythagorean-expectation diff + Log5 p_home
     "defense": False,       # B9a: team BABIP-against + xHits-saved
     "lineup_xr": False,     # LINEUP_XR: Markov lineup expected runs
+    "sp_stuff": False,      # E15: process-based SP quality (in-house Stuff+)
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
@@ -54,6 +55,9 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "defense": ("HOME_DEF_", "AWAY_DEF_", "DIFF_DEF_"),
     # more specific than the lineup prefixes, same trick as lineup_platoon
     "lineup_xr": ("HOME_LINEUP_XR", "AWAY_LINEUP_XR", "DIFF_LINEUP_XR"),
+    "sp_stuff": ("HOME_SP_STUFF", "AWAY_SP_STUFF", "DIFF_SP_STUFF",
+                 "HOME_SP_LOC", "AWAY_SP_LOC", "DIFF_SP_LOC",
+                 "HOME_SP_PITCH", "AWAY_SP_PITCH", "DIFF_SP_PITCH"),
 }
 
 # Feature families for the drop-one ablation profiles (E8a). Profile

@@ -528,6 +528,57 @@ def _sp_lookup(starts: pd.DataFrame):
     return lookup
 
 
+SP_STUFF_MIN_PITCHES = 80     # the primer's stabilization claim
+SP_STUFF_WINDOW = 1500        # ~15 starts; crosses season boundaries by design
+                              # (process metrics are sticky year-over-year,
+                              # unlike the season-scoped results rates)
+
+
+def _sp_stuff_lookup(max_date):
+    """pitcher_id -> as-of mean predicted run values from pitch_stuff_games
+    (E15, flag-gated 'sp_stuff'). Window = the trailing games covering the
+    last ~SP_STUFF_WINDOW scored pitches; NaN below SP_STUFF_MIN_PITCHES.
+    The table is point-in-time by construction (season S scored by models
+    trained on < S), so max_date truncation is a plain date filter."""
+    sql = "SELECT pitcher_id, game_date, n_pitches, stuff_rv, loc_rv, pitch_rv " \
+          "FROM pitch_stuff_games"
+    params = {}
+    if max_date:
+        sql += " WHERE game_date <= :max_date"
+        params["max_date"] = max_date
+    df = pd.read_sql(text(sql), get_engine(), params=params)
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df = df.sort_values(["pitcher_id", "game_date"]).reset_index(drop=True)
+    book = {}
+    for pid, grp in df.groupby("pitcher_id", sort=False):
+        n = grp["n_pitches"].to_numpy(float)
+        cums = {"n": np.concatenate([[0.0], n.cumsum()])}
+        for c in ("stuff_rv", "loc_rv", "pitch_rv"):
+            cums[c] = np.concatenate(
+                [[0.0], np.nancumsum(grp[c].to_numpy(float) * n)])
+        book[pid] = (grp["game_date"].to_numpy(), cums)
+
+    def lookup(pid, date64) -> dict:
+        entry = book.get(pid)
+        if entry is None:
+            return {}
+        dates, cum = entry
+        hi = int(np.searchsorted(dates, date64, side="left"))
+        if hi == 0:
+            return {}
+        lo = int(np.searchsorted(cum["n"], cum["n"][hi] - SP_STUFF_WINDOW,
+                                 side="left"))
+        lo = min(lo, hi - 1)
+        n = cum["n"][hi] - cum["n"][lo]
+        if n < SP_STUFF_MIN_PITCHES:
+            return {}
+        return {"SP_STUFF_RV": (cum["stuff_rv"][hi] - cum["stuff_rv"][lo]) / n,
+                "SP_LOC_RV": (cum["loc_rv"][hi] - cum["loc_rv"][lo]) / n,
+                "SP_PITCH_RV": (cum["pitch_rv"][hi] - cum["pitch_rv"][lo]) / n}
+
+    return lookup
+
+
 def _bullpen_lookup(bullpen: pd.DataFrame):
     book = {}
     for team_id, grp in bullpen.groupby("team_id", sort=False):
@@ -568,13 +619,14 @@ BLEND_COLS = ["BLEND_RUNS_PG", "BLEND_RA_PG", "BLEND_WOBA", "BLEND_XWOBA_CON",
               "BLEND_K_PCT", "BLEND_BB_PCT"]
 DEF_COLS = ["DEF_BABIP_AGAINST_L30", "DEF_BABIP_AGAINST_SEASON",
             "DEF_XHITS_SAVED_L30", "DEF_XHITS_SAVED_SEASON"]
+SP_STUFF_COLS = ["SP_STUFF_RV", "SP_LOC_RV", "SP_PITCH_RV"]  # E15, flag 'sp_stuff'
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
     "SP_WOBA_AGAINST_L10", "SP_XWOBA_CON_AGAINST_L10", "SP_IP_PER_START_L10",
     "SP_DAYS_REST", "SP_THROWS_L",
     "TRAVEL_KM", "TRAVEL_TZ_DELTA",  # E8e, flag-gated 'travel'
-] + PRIOR_COLS + BLEND_COLS + DEF_COLS + LINEUP_COLS
+] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS + LINEUP_COLS
 DIFF_COLS = [
     "RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
@@ -585,7 +637,7 @@ DIFF_COLS = [
     "LINEUP_N_REG_OUT", "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
     "LINEUP_SAME_HAND_SHARE",
     "LINEUP_XR",
-] + PRIOR_COLS + BLEND_COLS + DEF_COLS
+] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS
 
 # Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
 WOBA_WEIGHTS = {"BB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
@@ -865,6 +917,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     team_roll = _team_rolling(team_games, cross_season=cross_season)
     prior_book = _prior_book(team_games)
     sp = _sp_lookup(starts)
+    sp_stuff = _sp_stuff_lookup(max_date)
     bp = _bullpen_lookup(bullpen)
     lineup = _lineup_strength(max_date)
     travel = _travel_lookup(games)
@@ -936,6 +989,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1
                 side_vals.update(sp(int(pid), g.game_date.to_datetime64()))
+                side_vals.update(sp_stuff(int(pid), g.game_date.to_datetime64()))
                 side_vals["SP_THROWS_L"] = 1 if throws.get(int(pid)) == "L" else 0
             else:
                 side_vals["SP_KNOWN"] = 0
@@ -1089,6 +1143,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
     team_at = _team_date_lookup(team_games)
     prior_book = _prior_book(team_games)
     sp = _sp_lookup(starts)
+    sp_stuff = _sp_stuff_lookup(asof_date)
     bp = _bullpen_lookup(bullpen)
     travel = _travel_lookup(games)
     venue_env = _venue_env_lookup(games)
@@ -1148,6 +1203,7 @@ def build_prediction_rows(slate: pd.DataFrame, asof_date: str,
             if pid is not None and not pd.isna(pid):
                 side_vals["SP_KNOWN"] = 1
                 side_vals.update(sp(int(pid), game_date.to_datetime64()))
+                side_vals.update(sp_stuff(int(pid), game_date.to_datetime64()))
                 side_vals["SP_THROWS_L"] = 1 if throws.get(int(pid)) == "L" else 0
             else:
                 side_vals["SP_KNOWN"] = 0

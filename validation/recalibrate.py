@@ -138,6 +138,20 @@ def run(base: str) -> pd.DataFrame:
         return lr.predict_proba(Xc)[:, 1]
     variants["log"] = (_monthly(d, _log), margin)
 
+    # Wave-5 stack (hv (+) log): the logistic head over the PER-GAME
+    # variance-scaled margin — tests whether the dispersion correction adds
+    # anything on top of the confirmed log head.
+    def _hvlog(f, c):
+        cval = float(np.mean(f["resid"] ** 2) / f["lam_sum"].mean())
+        zf = f["pred_margin"] / np.sqrt(np.maximum(cval * f["lam_sum"], 1.0))
+        zc = c["pred_margin"] / np.sqrt(np.maximum(cval * c["lam_sum"], 1.0))
+        Xf = np.column_stack([zf, _logit(f["elo_p"].to_numpy())])
+        Xc = np.column_stack([zc, _logit(c["elo_p"].to_numpy())])
+        lr = LogisticRegression(C=1e6, max_iter=1000)
+        lr.fit(Xf, (f["actual_margin"] > 0).astype(int))
+        return lr.predict_proba(Xc)[:, 1]
+    variants["hvlog"] = (_monthly(d, _hvlog), margin)
+
     # E10 lgbm+RF margin ensemble — pairs the lgbm base with the SAME-SEED rf
     # run (rf_runs+8s, rf_runs+8s_s1, ...); skipped when that run is absent.
     if base.startswith("lgbm_runs+8s"):

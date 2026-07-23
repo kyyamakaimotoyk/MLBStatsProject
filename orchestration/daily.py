@@ -77,9 +77,51 @@ def _stale(bundle: dict | None, target_date: str) -> bool:
     return age > RETRAIN_AFTER_DAYS
 
 
+# E11c calibration source: the validated walk-forward archive (update the
+# constants when a newer archive ships). Verdicts: log loss .6813 vs .6836
+# pooled at seeds 0/1/2; 2026 holdout .6872 vs .6995, p=.016.
+CAL_P_ARCHIVE = ("lgbm_runs+8s", "elo+8s", "v20260716_083741")
+CAL_P_MIN_GAMES = 1500
+
+
+def _fit_p_calibrator() -> dict | None:
+    """E11c (SHIPPED 2026-07-23): logistic p_home over [margin/sigma,
+    logit(elo p)], fit on stored out-of-sample walk-forward predictions
+    joined to finals — everything strictly historical, so serve-time use is
+    point-in-time by construction (the B6 cal_hit pattern)."""
+    from sklearn.linear_model import LogisticRegression
+
+    lgbm_tag, elo_tag, ver = CAL_P_ARCHIVE
+    d = pd.read_sql(text("""
+        SELECT a.pred_margin, e.p_home AS elo_p,
+               (g.home_score > g.away_score)::int AS win,
+               g.home_score - g.away_score - a.pred_margin AS resid
+        FROM model_predictions a
+        JOIN model_predictions e
+          ON e.game_pk = a.game_pk AND e.model_version = a.model_version
+         AND e.model_type = :elo_tag
+        JOIN games g ON g.game_pk = a.game_pk AND g.is_final
+        WHERE a.model_type = :lgbm_tag AND a.model_version = :ver
+    """), get_engine(), params={"lgbm_tag": lgbm_tag, "elo_tag": elo_tag,
+                                "ver": ver})
+    if len(d) < CAL_P_MIN_GAMES:
+        log.warning("p calibrator: only %d graded rows (<%d); p_home stays raw",
+                    len(d), CAL_P_MIN_GAMES)
+        return None
+    sigma = max(float(d["resid"].std()), 1.0)
+    ep = np.clip(d["elo_p"].to_numpy(float), 1e-6, 1 - 1e-6)
+    X = np.column_stack([d["pred_margin"].to_numpy(float) / sigma,
+                         np.log(ep / (1 - ep))])
+    lr = LogisticRegression(C=1e6, max_iter=1000).fit(X, d["win"].to_numpy())
+    log.info("p calibrator fit on %d graded games (sigma %.3f, coef %s)",
+             len(d), sigma, np.round(lr.coef_[0], 3).tolist())
+    return {"lr": lr, "sigma": sigma, "n_fit": int(len(d))}
+
+
 def _team_bundle(target_date: str) -> dict:
     bundle = _load_bundle("team_runs_latest.joblib")
-    if not _stale(bundle, target_date):
+    # bundles predating the E11c calibrator retrain once to pick it up
+    if not _stale(bundle, target_date) and bundle.get("cal_p") is not None:
         log.info("team bundle fresh (trained through %s)", bundle["trained_through"])
         return bundle
     log.info("training team models on all data ...")
@@ -90,6 +132,7 @@ def _team_bundle(target_date: str) -> dict:
     elo = EloBaseline()
     elo.fit(df, feats)
     bundle = {"model": model, "elo": elo, "feats": feats,
+              "cal_p": _fit_p_calibrator(),
               "trained_through": str(df["game_date"].max())[:10]}
     _save_bundle("team_runs_latest.joblib", bundle)
     return bundle
@@ -342,6 +385,18 @@ def predict_team(slate: pd.DataFrame, target_date: str, asof: str,
         mean_p = preds["p_home"].mean()
         if not 0.40 <= mean_p <= 0.68:
             warnings.append(f"{name}: slate mean p_home {mean_p:.3f} outside [0.40, 0.68]")
+    # E11c (shipped 2026-07-23): calibrated p_home for the lgbm head —
+    # logistic over [margin/sigma, logit(elo p)] from the bundle calibrator.
+    # Picks (pred_margin) and totals are untouched; raw p stays if the
+    # calibrator is absent.
+    cal = bundle.get("cal_p")
+    if cal is not None:
+        ep = np.clip(out[1]["p_home"].to_numpy(float), 1e-6, 1 - 1e-6)
+        X = np.column_stack([out[0]["pred_margin"].to_numpy(float) / cal["sigma"],
+                             np.log(ep / (1 - ep))])
+        out[0]["p_home"] = cal["lr"].predict_proba(X)[:, 1]
+        if ((out[0]["p_home"] < 0.10) | (out[0]["p_home"] > 0.90)).any():
+            warnings.append("lgbm_runs: calibrated p_home outside [0.10, 0.90]")
     all_preds = pd.concat(out, ignore_index=True)
 
     records = all_preds.assign(model_version=VERSION, data_through_date=asof)

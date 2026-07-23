@@ -179,3 +179,79 @@ def pa_lookup(dists: dict):
 
 def pa_count_distribution(train_pa_per_game: pd.DataFrame, max_pa: int = 7):
     return pa_lookup(build_pa_dists(train_pa_per_game, max_pa))
+
+
+# ---- B8a (shipped 2026-07-23): slot-conditional expected RBI ---------------
+# rbar(outcome, slot) = shrunken mean RBI credited when class c occurs from
+# lineup slot s; exp_rbi = exp_pa x sum_c p[c] x rbar(c, slot). Shared by
+# validation.walkforward_batter and orchestration.daily so the two paths can
+# never drift (walk-forward: 0.6331 vs 0.6363 marginal / 0.6367 slot-only
+# RBI MAE, p<.0001 at seeds 0/1/2, 158,169 batter-games 2023-2026).
+ERA_RBI_PRIOR = {"OUT": 0.025, "K": 0.0, "BB": 0.03, "HBP": 0.03,
+                 "1B": 0.30, "2B": 0.45, "3B": 0.50, "HR": 1.57}
+RBI_LEAGUE_PRIOR = 0.115   # league RBI per PA, era constant
+RBI_SHRINK_SLOT = 300.0
+RBI_CLASS_MIN_PA = 10_000
+
+
+def rbi_events(max_date: str | None = None) -> pd.DataFrame:
+    """Starter PAs with credited RBIs, lineup slot, and outcome class — the
+    raw material for rbar(outcome, slot). Point-in-time via max_date (the
+    daily path passes asof; the harness filters by season instead)."""
+    from sqlalchemy import text
+
+    from core.db import get_engine
+    from features.batter_features import EVENT_MAP
+
+    sql = """
+        SELECT g.season, g.game_date, p.game_pk, p.batter_id, p.rbi,
+               p.event_type, l.batting_order AS slot
+        FROM plays p
+        JOIN games g USING (game_pk)
+        LEFT JOIN lineups l ON l.game_pk = p.game_pk AND l.player_id = p.batter_id
+        WHERE g.is_final
+    """
+    params = {}
+    if max_date:
+        sql += " AND g.game_date <= :max_date"
+        params["max_date"] = max_date
+    df = pd.read_sql(text(sql), get_engine(), params=params)
+    df["outcome"] = df["event_type"].map(EVENT_MAP)
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["rbi"] = df["rbi"].fillna(0).astype(float)
+    return df.dropna(subset=["outcome"]).reset_index(drop=True)
+
+
+def rbi_table(events: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """(rbar matrix [slot 0..9 x class], slot-marginal rbar [slot 0..9]).
+    Class-global means fall back to fixed era constants below
+    RBI_CLASS_MIN_PA — never frame-derived when thin (ERA_PRIOR lesson)."""
+    ev = events.dropna(subset=["slot"])
+    ev = ev[ev["slot"].between(1, 9)].copy()
+    ev["slot"] = ev["slot"].astype(int)
+    g_class = ev.groupby("outcome")["rbi"].agg(["sum", "count"])
+    rbar_c = {}
+    for c in CLASSES:
+        if c in g_class.index and g_class.loc[c, "count"] >= RBI_CLASS_MIN_PA:
+            rbar_c[c] = float(g_class.loc[c, "sum"] / g_class.loc[c, "count"])
+        else:
+            rbar_c[c] = ERA_RBI_PRIOR[c]
+    g_cell = ev.groupby(["slot", "outcome"])["rbi"].agg(["sum", "count"])
+    mat = np.zeros((10, len(CLASSES)))
+    for s in range(1, 10):
+        for ci, c in enumerate(CLASSES):
+            if (s, c) in g_cell.index:
+                cell = g_cell.loc[(s, c)]
+                mat[s, ci] = ((cell["sum"] + RBI_SHRINK_SLOT * rbar_c[c])
+                              / (cell["count"] + RBI_SHRINK_SLOT))
+            else:
+                mat[s, ci] = rbar_c[c]
+    overall = float(ev["rbi"].sum() / max(len(ev), 1)) if len(ev) else RBI_LEAGUE_PRIOR
+    g_slot = ev.groupby("slot")["rbi"].agg(["sum", "count"])
+    slot_marg = np.full(10, overall)
+    for s in range(1, 10):
+        if s in g_slot.index:
+            cell = g_slot.loc[s]
+            slot_marg[s] = ((cell["sum"] + RBI_SHRINK_SLOT * overall)
+                            / (cell["count"] + RBI_SHRINK_SLOT))
+    return mat, slot_marg

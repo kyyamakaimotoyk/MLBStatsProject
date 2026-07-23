@@ -238,7 +238,7 @@ def player(player_id: int, days: int = Query(250, le=500)):
                g.home_score, g.away_score,
                bg.pa, bg.ab, bg.r, bg.h, bg.doubles, bg.triples, bg.hr, bg.tb,
                bg.rbi, bg.bb, bg.so AS k, bg.hbp, bg.sf, bg.sb,
-               bp.exp_h, bp.exp_tb, bp.exp_hr, bp.exp_bb, bp.exp_k,
+               bp.exp_h, bp.exp_tb, bp.exp_hr, bp.exp_bb, bp.exp_k, bp.exp_rbi,
                bp.p_hit, bp.p_hr
         FROM batter_game_lines bg
         JOIN games g USING (game_pk)
@@ -320,7 +320,7 @@ def player(player_id: int, days: int = Query(250, le=500)):
 
     latest_pred = pd.read_sql(text("""
         SELECT bp.exp_pa, bp.exp_h, bp.exp_tb, bp.exp_hr, bp.exp_bb, bp.exp_k,
-               bp.p_hit, bp.p_hr, g.game_date::text AS for_date
+               bp.exp_rbi, bp.p_hit, bp.p_hr, g.game_date::text AS for_date
         FROM batter_predictions bp
         JOIN games g ON g.game_pk = bp.game_pk
         WHERE bp.player_id = :p

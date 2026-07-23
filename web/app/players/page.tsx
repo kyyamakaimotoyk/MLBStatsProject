@@ -20,6 +20,7 @@ type BatterRow = {
   p_tb2: number | null;
   exp_h: number | null;
   exp_tb: number | null;
+  exp_rbi: number | null;
 };
 
 export default function PlayersPage() {
@@ -107,6 +108,7 @@ export default function PlayersPage() {
                   <th className="px-3 py-2">{t.players.colFacing}</th>
                   <th className="px-3 py-2 text-right">{t.players.colHomers}</th>
                   <th className="px-3 py-2 text-right">{t.players.colTb2}</th>
+                  <th className="px-3 py-2 text-right">{t.players.colRbi}</th>
                   <th className="px-3 py-2 text-right">{t.players.colHit}</th>
                 </tr>
               </thead>
@@ -138,6 +140,9 @@ export default function PlayersPage() {
                     </td>
                     <td className="px-3 py-2 text-right font-medium">{pctLabel(r.p_hr)}</td>
                     <td className="px-3 py-2 text-right">{pctLabel(r.p_tb2)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {r.exp_rbi != null ? r.exp_rbi.toFixed(2) : "—"}
+                    </td>
                     <td className="px-3 py-2 text-right text-zinc-500">{pctLabel(r.p_hit)}</td>
                   </tr>
                 ))}

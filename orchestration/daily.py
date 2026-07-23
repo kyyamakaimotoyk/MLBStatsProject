@@ -434,6 +434,13 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
     # calibrator (older bundles predate it and stay raw until retrain)
     if bundle.get("cal_hit") is not None:
         agg["p_hit"] = bundle["cal_hit"].predict(agg["p_hit"])
+    # B8a (shipped 2026-07-23): slot-conditional expected RBI. rbar computed
+    # as-of; probs here are post-B2-blend (walk-forward evaluated pre-blend —
+    # K rbar is 0 and the blend's rescale is second-order, the B6 vintage
+    # convention). Walk-forward: 0.6331 vs 0.6363 marginal, p<.0001, 3 seeds.
+    rmat, _ = bm.rbi_table(bm.rbi_events(max_date=asof))
+    agg["exp_rbi"] = agg["exp_pa"] * (
+        probs * rmat[frame["lineup_slot"].to_numpy(int)]).sum(axis=1)
 
     warnings = []
     if not np.all((agg["p_hit"] > 0.20) & (agg["p_hit"] < 0.90)):
@@ -445,7 +452,7 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
 
     result = frame[["game_pk", "player_id", "sp_id", "lineup_slot"]].copy()
     for k in ("exp_pa", "exp_h", "exp_tb", "exp_hr", "exp_bb", "exp_k",
-              "p_hit", "p_hr", "p_tb2", "p_bb"):
+              "p_hit", "p_hr", "p_tb2", "p_bb", "exp_rbi"):
         result[k] = agg[k]
     records = result.assign(model_version=VERSION, data_through_date=asof)
     records = records.astype(object).where(records.notna(), None)
@@ -454,10 +461,10 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
             INSERT INTO batter_predictions
                 (game_pk, player_id, model_version, data_through_date, sp_id,
                  lineup_slot, exp_pa, exp_h, exp_tb, exp_hr, exp_bb, exp_k,
-                 p_hit, p_hr, p_tb2, p_bb)
+                 p_hit, p_hr, p_tb2, p_bb, exp_rbi)
             VALUES (:game_pk, :player_id, :model_version, :data_through_date, :sp_id,
                     :lineup_slot, :exp_pa, :exp_h, :exp_tb, :exp_hr, :exp_bb, :exp_k,
-                    :p_hit, :p_hr, :p_tb2, :p_bb)
+                    :p_hit, :p_hr, :p_tb2, :p_bb, :exp_rbi)
             ON CONFLICT (game_pk, player_id, model_version) DO UPDATE SET
                 data_through_date = EXCLUDED.data_through_date,
                 sp_id = EXCLUDED.sp_id, lineup_slot = EXCLUDED.lineup_slot,
@@ -465,7 +472,8 @@ def predict_batters(slate: pd.DataFrame, target_date: str, asof: str,
                 exp_tb = EXCLUDED.exp_tb, exp_hr = EXCLUDED.exp_hr,
                 exp_bb = EXCLUDED.exp_bb, exp_k = EXCLUDED.exp_k,
                 p_hit = EXCLUDED.p_hit, p_hr = EXCLUDED.p_hr,
-                p_tb2 = EXCLUDED.p_tb2, p_bb = EXCLUDED.p_bb, created_at = now()
+                p_tb2 = EXCLUDED.p_tb2, p_bb = EXCLUDED.p_bb,
+                exp_rbi = EXCLUDED.exp_rbi, created_at = now()
         """), records.to_dict("records"))
 
     # B7 (shipped 2026-07-17): starter-scoped heads. exp_k/bb/h = w_sp x

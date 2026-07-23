@@ -23,6 +23,7 @@ type BatterPrediction = {
   p_hit: number | null;
   p_hr: number | null;
   p_tb2: number | null;
+  exp_rbi: number | null;
 };
 
 export default function BattersPage() {
@@ -90,6 +91,7 @@ export default function BattersPage() {
                 <th className="px-3 py-2 text-right">{t.batters.colEH}</th>
                 <th className="px-3 py-2 text-right">{t.batters.colETb}</th>
                 <th className="px-3 py-2 text-right">{t.batters.colEK}</th>
+                <th className="px-3 py-2 text-right">{t.batters.colERbi}</th>
               </tr>
             </thead>
             <tbody>
@@ -130,6 +132,7 @@ export default function BattersPage() {
                   <td className="px-3 py-2 text-right">{fmtNum(r.exp_h)}</td>
                   <td className="px-3 py-2 text-right">{fmtNum(r.exp_tb)}</td>
                   <td className="px-3 py-2 text-right">{fmtNum(r.exp_k)}</td>
+                  <td className="px-3 py-2 text-right">{fmtNum(r.exp_rbi)}</td>
                 </tr>
               ))}
             </tbody>

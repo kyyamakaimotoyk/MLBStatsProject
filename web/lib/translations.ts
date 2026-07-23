@@ -264,6 +264,7 @@ const en = {
     colFacing: "Facing",
     colHomers: "Homers",
     colTb2: "2+ total bases",
+    colRbi: "RBI expected",
     colHit: "Gets a hit",
     hitterFoot:
       'Chances cover the whole game. We lead with home runs and extra bases because they separate hitters — most starters get a hit on any given night, so "gets a hit" runs 50–70% for nearly everyone.',
@@ -382,6 +383,7 @@ const en = {
     colEH: "E[H]",
     colETb: "E[TB]",
     colEK: "E[K]",
+    colERbi: "E[RBI]",
   },
 
   perf: {
@@ -760,6 +762,7 @@ const ja: Dict = {
     colFacing: "対戦投手",
     colHomers: "本塁打",
     colTb2: "塁打数2以上",
+    colRbi: "打点期待値",
     colHit: "安打",
     hitterFoot:
       "確率はいずれも試合全体を通してのものです。本塁打と長打を先頭に置いているのは、打者の差が表れやすいからです。先発出場する打者の多くはその日ヒットを打つため、「安打」の確率はほぼ全員が50〜70%になります。",
@@ -878,6 +881,7 @@ const ja: Dict = {
     colEH: "E[安打]",
     colETb: "E[塁打]",
     colEK: "E[三振]",
+    colERbi: "E[打点]",
   },
 
   perf: {

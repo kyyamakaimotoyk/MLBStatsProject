@@ -106,69 +106,14 @@ def _load_game_side_data():
 B4_COLS = ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH")
 
 # ---- B8a (2026-07 cycle): slot-conditional expected RBI --------------------
-# rbar(outcome, slot) = shrunken mean RBI credited when class c occurs from
-# lineup slot s, W=300 toward the class-global mean; class-global falls back
-# to fixed era constants below 10k observed PAs (the ERA_PRIOR discipline —
-# never frame-derived when thin). exp_rbi = sum_c E[n_c] x rbar(c, slot).
-ERA_RBI_PRIOR = {"OUT": 0.025, "K": 0.0, "BB": 0.03, "HBP": 0.03,
-                 "1B": 0.30, "2B": 0.45, "3B": 0.50, "HR": 1.57}
-RBI_LEAGUE_PRIOR = 0.115   # league RBI per PA, era constant
-RBI_SHRINK_SLOT = 300.0
+# The rbar machinery lives in modeling.batter_model (shared with the daily
+# pipeline so the two paths can never drift); the harness keeps only the
+# marginal-baseline lookup below.
+from modeling.batter_model import (RBI_LEAGUE_PRIOR,  # noqa: E402
+                                   rbi_events as _load_rbi_events,
+                                   rbi_table as _rbi_table)
+
 RBI_SHRINK_BATTER = 150.0  # mirrors the batter model's overall shrinkage W
-RBI_CLASS_MIN_PA = 10_000
-
-
-def _load_rbi_events() -> pd.DataFrame:
-    """Starter PAs with credited RBIs, lineup slot, and outcome class — the
-    raw material for rbar(outcome, slot) and the marginal baseline. Pinch
-    hitters have no lineups row (slot NaN) and drop out of the slot table;
-    they are also outside the evaluated starter population."""
-    df = pd.read_sql(text("""
-        SELECT g.season, g.game_date, p.game_pk, p.batter_id, p.rbi,
-               p.event_type, l.batting_order AS slot
-        FROM plays p
-        JOIN games g USING (game_pk)
-        LEFT JOIN lineups l ON l.game_pk = p.game_pk AND l.player_id = p.batter_id
-        WHERE g.is_final
-    """), get_engine())
-    df["outcome"] = df["event_type"].map(bf.EVENT_MAP)
-    df["game_date"] = pd.to_datetime(df["game_date"])
-    df["rbi"] = df["rbi"].fillna(0).astype(float)
-    return df.dropna(subset=["outcome"]).reset_index(drop=True)
-
-
-def _rbi_table(events: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    """(rbar matrix [slot 0..9 x class], slot-marginal rbar [slot 0..9]) from
-    the given events — call with seasons strictly before the test season."""
-    ev = events.dropna(subset=["slot"])
-    ev = ev[ev["slot"].between(1, 9)].copy()
-    ev["slot"] = ev["slot"].astype(int)
-    g_class = ev.groupby("outcome")["rbi"].agg(["sum", "count"])
-    rbar_c = {}
-    for c in CLASSES:
-        if c in g_class.index and g_class.loc[c, "count"] >= RBI_CLASS_MIN_PA:
-            rbar_c[c] = float(g_class.loc[c, "sum"] / g_class.loc[c, "count"])
-        else:
-            rbar_c[c] = ERA_RBI_PRIOR[c]
-    g_cell = ev.groupby(["slot", "outcome"])["rbi"].agg(["sum", "count"])
-    mat = np.zeros((10, len(CLASSES)))
-    for s in range(1, 10):
-        for ci, c in enumerate(CLASSES):
-            if (s, c) in g_cell.index:
-                cell = g_cell.loc[(s, c)]
-                mat[s, ci] = ((cell["sum"] + RBI_SHRINK_SLOT * rbar_c[c])
-                              / (cell["count"] + RBI_SHRINK_SLOT))
-            else:
-                mat[s, ci] = rbar_c[c]
-    overall = float(ev["rbi"].sum() / max(len(ev), 1)) if len(ev) else RBI_LEAGUE_PRIOR
-    g_slot = ev.groupby("slot")["rbi"].agg(["sum", "count"])
-    slot_marg = np.full(10, overall)
-    for s in range(1, 10):
-        if s in g_slot.index:
-            cell = g_slot.loc[s]
-            slot_marg[s] = ((cell["sum"] + RBI_SHRINK_SLOT * overall)
-                            / (cell["count"] + RBI_SHRINK_SLOT))
-    return mat, slot_marg
 
 
 def _batter_rbi_lookup(events: pd.DataFrame):

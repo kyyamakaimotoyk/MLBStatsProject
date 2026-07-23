@@ -55,6 +55,7 @@ cd infra; terraform plan                     # infra changes (tfvars has home IP
 .venv\Scripts\python scripts\alpha_atlas.py     # per-stat reliability constants -> docs/alpha_atlas_*.md
 .venv\Scripts\python scripts\reprocess_statcast.py   # B8b: base-state/zone/fielder cols from S3 archive
                                                      # (hours; never alongside a snapshot rebuild)
+.venv\Scripts\python -m ingestion.import_oaa --start 2016 --end 2026   # B9b: Savant OAA (year+month buckets)
 
 # Features (rebuild order: rating -> park -> features):
 .venv\Scripts\python -m features.team_rating

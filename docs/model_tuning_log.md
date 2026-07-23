@@ -607,3 +607,38 @@ players-page "RBI expected" column with translations. Known v1 limitation
 (recorded): slot-average runner context, blind to tonight's specific
 on-base environment — the B8b base-state upgrade (statcast reprocess,
 migration 0012) is the queued sharpening.
+
+---
+
+## E9a/E9b/E14/B9a/LINEUP_XR — 2026-07-23 — Wave-2 snapshot wave: nothing ships
+
+**Setup.** One rebuild, snapshot v20260723_014637 (17,067 rows x 174 cols,
+leakage PASS on 11,854 games; default columns unchanged, so lgbm_runs+8s
+@v20260716_083741 carries over as the paired baseline; current pointer
+unmoved). One flag per run, ablation pooled + Mar-Jun slice.
+
+**Results (8,713-ish paired; slice = 5,019 games).**
+
+| variant | flag | pooled verdict | Mar-Jun slice |
+|---|---|---|---|
+| E9a +pri8 | priors | acc .5548 vs .5612, **McNemar p=.029 WORSE**; rest null | **.5471 vs .5553, p=.043 WORSE** |
+| E9b +priB8 | priors_blend | null on all metrics (acc p=.48) | null (p=.69) |
+| E14 +pyth8 | pyth | null (acc p=.66, AUC +.0009 p=.48) | null (AUC +.0008 p=.60) |
+| B9a +def8 | defense | null; totals -.002 (p=.42) — hoped-for gain absent | — |
+| +lxr8 | lineup_xr | null; acc -.44pp (p=.084 directional) — as pre-registered | — |
+
+**Decisions.** All five REJECTED; flags stay off; columns remain in the
+builder; current snapshot pointer stays at v20260716_083741.
+
+**The load-bearing finding: E9 is closed.** The top queued pick-side lever
+(E8g's early-season diagnosis) fails IN its own mechanism window — raw
+prior-season team rates actively hurt March-June picks, and the
+alpha-atlas-calibrated blend is inert. Reading: Elo already carries kappa=2/3
+season carryover, so additional prior-rate columns add only correlated noise
+to the linear Elo+SP core the ridge diagnostic identified. Whatever the
+market knows early-season that we don't, it is NOT last season's team rates.
+Remaining pick-side levers per the locked set: E15 SP_STUFF (process-based
+SP quality — SP features carry picks and are noisiest exactly early-season),
+the Wave-5 hv(+)log probability ship, and the umpire/totals track. Do not
+revisit E9-style team-rate priors without a structurally different
+information source (e.g., roster-projection-based priors).

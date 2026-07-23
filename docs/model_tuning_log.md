@@ -569,3 +569,41 @@ as the gate is designed to catch. Closed for this cycle; do not re-run
 without new information (more seasons, or an RF variant with a materially
 different bias profile). The consistent small directional edge is recorded;
 E8h's parked status resolves to REJECTED-for-shipping.
+
+---
+
+## B8a — 2026-07-23 — slot-conditional expected RBI: CONFIRMED, SHIPS
+
+**Hypothesis.** RBI is predictable without base-state data via
+r̄(outcome, slot) — the shrunken league mean RBI credited when class c
+occurs from lineup slot s — aggregated over the per-PA heads:
+exp_rbi = exp_pa x sum_c p_mix[c] x r̄(c, slot). Beating the batter's own
+marginal RBI rate shows the head works; beating a slot-only variant shows
+the OUTCOME conditioning specifically earns its keep.
+
+**Setup.** r̄ from seasons strictly before each test season (W=300 toward
+class-globals; era constants below 10k PAs — never frame-derived).
+Baselines: exp_pa x batter's rolling 60-game shrunken RBI/PA (W=150,
+searchsorted as-of), and exp_pa x r̄(slot). walkforward_batter
+--seasons 2023 2024 2025 2026, seeds 0/1/2, migration 0011. Sanity gates
+passed pre-launch: HR r̄ 1.66 (slot 4) / 1.55 (slot 9) ≈ 1 + mean runners
+on; league RBI/PA .1146 vs the .115 era constant.
+
+**Result (pooled 158,169 batter-games, paired-t).**
+
+| seed | model | batter-marginal | p | slot-only | p |
+|---|---|---|---|---|---|
+| 0 | 0.6331 | 0.6363 | <.0001 | 0.6367 | <.0001 |
+| 1 | 0.6331 | 0.6363 | <.0001 | 0.6367 | <.0001 |
+| 2 | 0.6330 | 0.6363 | <.0001 | 0.6367 | <.0001 |
+
+Direction identical at every seed; magnitudes stable to the fourth decimal.
+
+**Decision.** SHIPS (the significance + multi-seed bar is met, same
+character as B7's aggregation wins). Ship work: daily-pipeline r̄ table
+(as-of, one SQL aggregate at predict time) + exp_rbi in the batter
+aggregation and batter_predictions write; /api/public players/feed columns;
+players-page "RBI expected" column with translations. Known v1 limitation
+(recorded): slot-average runner context, blind to tonight's specific
+on-base environment — the B8b base-state upgrade (statcast reprocess,
+migration 0012) is the queued sharpening.

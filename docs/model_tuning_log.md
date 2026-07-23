@@ -676,3 +676,33 @@ the market's remaining March-June edge is not reachable from public
 team/pitcher performance data of any flavor tried this cycle. The
 probability head (E11c log, confirmed) remains the cycle's shippable
 team-side win.
+
+---
+
+## W5 — 2026-07-23 — Wave-5 combined round: E11c log SHIPS to production; combos close
+
+**hv(+)log stack.** hvlog (logistic over the per-game-variance-scaled margin
++ Elo logit) beats log directionally at EVERY seed but never significantly
+(log loss p=.075/.083/.115). Simpler-ships rule: log is the head. hvlog
+recorded as the standing candidate when seasons accumulate.
+
+**2026 holdout confirmation (selection hygiene).** log vs raw on the 1,444
+untouched 2026 games: log loss .6872 vs .6995, p=.016 — the raw head's 2026
+miscalibration was worse than pooled, and log recovers most of it.
+
+**SHIPPED.** orchestration/daily.py: bundle-time logistic calibrator
+(cal_p; fit on the 8,713-game walk-forward archive: sigma 4.466, coef
+[.73 margin-z, .50 elo-logit]; CAL_P_ARCHIVE constants name the source
+tags), applied to the lgbm p_home at serve; picks/margins/totals untouched;
+raw fallback + tripwire; pre-calibrator bundles retrain once. Pipeline image
+deployed. Served p_home now shrinks the documented overconfidence (e.g.
++1.5-run margin at even Elo: .631 raw -> .570 calibrated).
+
+**Combined totals arm (+sd8, sp_stuff+defense @v20260723_030056).** The
+E15-totals thread does not strengthen with DEF: total MAE 3.5302 vs 3.5331
+(p=.37, weaker than E15 alone at p=.070), acc/AUC null-to-worse. CLOSED —
+no combined feature ship; E15-totals stays parked on its own terms.
+
+**Wave-5 outcome.** One production ship (the probability head), every
+combination arm closed clean. The cycle's team-side story is complete:
+calibration, not information, was the recoverable edge in public data.

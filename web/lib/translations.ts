@@ -168,6 +168,8 @@ const en = {
     chartsAppear: "Charts appear once a window has more than 100 graded games.",
     backtestNote:
       "The record includes the model's full backtest: for every past game the model was trained only on games before it, then its prediction was graded — the same rules it plays by every night now.",
+    calibrationNote:
+      "The win chances themselves are calibrated: the model's predicted margin is blended with the Elo rating's probability, with the blend fit only on already-graded past games. When we say 60%, teams in that spot have historically won about 60% of the time. Calibration changes the honesty of the percentages, not the picks — the picked side still comes from the predicted score.",
   },
 
   charts: {
@@ -176,7 +178,7 @@ const en = {
     shareOfGames: "Share of games",
     confidence: {
       title: "Hit rate by pick confidence",
-      sub: "Confidence is the win chance the model gave its own pick. The orange line is the hit rate counting only picks at least that confident; the blue line is the share of games that clears the bar. A well-behaved model climbs from left to right — its surer picks should land more often. The dashed line is coin-flip.",
+      sub: "Confidence is the win chance the model gave its own pick. The orange line is the hit rate counting only picks at least that confident; the blue line is the share of games that clears the bar. A well-behaved model climbs from left to right — its surer picks should land more often. The dashed line is coin-flip. Win chances are calibrated against thousands of graded games, so the percentages mean what they say.",
       x: "Minimum win chance to count the pick",
       y: "Percent of games",
       hitRate: "Hit rate",
@@ -666,6 +668,8 @@ const ja: Dict = {
     chartsAppear: "グラフは、期間内の採点済み試合が100試合を超えると表示されます。",
     backtestNote:
       "実績にはモデルのバックテスト全体も含まれています。過去のどの試合についても、モデルはその試合より前の試合だけで学習したうえで予測し、採点されています。現在毎晩使っているのと同じルールです。",
+    calibrationNote:
+      "勝率の数値そのものも較正（キャリブレーション）しています。モデルの予測点差とEloレーティングの勝率を組み合わせ、採点済みの過去の試合だけに合わせて調整したものです。60%と表示されるときは、同じ状況のチームが実際に約60%の頻度で勝ってきた、という意味になります。較正で変わるのは確率の正直さであって、どちらのチームを選ぶかは予測スコアで決まるため変わりません。",
   },
 
   charts: {
@@ -674,7 +678,7 @@ const ja: Dict = {
     shareOfGames: "試合の割合",
     confidence: {
       title: "確信度別の的中率",
-      sub: "確信度は、モデルが自分の予測に与えた勝率です。オレンジの線はその確信度以上の予測だけを数えた的中率、青の線はその基準を満たす試合の割合を示します。健全なモデルほどグラフは右肩上がりになり、確信の強い予測ほどよく当たるはずです。破線は五分五分の50%です。",
+      sub: "確信度は、モデルが自分の予測に与えた勝率です。オレンジの線はその確信度以上の予測だけを数えた的中率、青の線はその基準を満たす試合の割合を示します。健全なモデルほどグラフは右肩上がりになり、確信の強い予測ほどよく当たるはずです。破線は五分五分の50%です。勝率は採点済みの数千試合に対して較正してあり、表示どおりの意味を持ちます。",
       x: "集計に含める最低勝率",
       y: "試合の割合",
       hitRate: "的中率",

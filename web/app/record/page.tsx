@@ -201,6 +201,7 @@ export default function RecordPage() {
       )}
 
       <p className="text-xs text-zinc-400">{t.record.backtestNote}</p>
+      <p className="text-xs text-zinc-400">{t.record.calibrationNote}</p>
     </div>
   );
 }

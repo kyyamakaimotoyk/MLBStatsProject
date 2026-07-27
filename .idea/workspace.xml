@@ -5,7 +5,17 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="97893cc2-d927-4e56-b225-534addae1b22" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/web/lib/ads.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/lib/ads.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/public.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/public.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/model_tuning_log.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/model_tuning_log.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/features/team_features.py" beforeDir="false" afterPath="$PROJECT_DIR$/features/team_features.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/features/team_rating.py" beforeDir="false" afterPath="$PROJECT_DIR$/features/team_rating.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/orchestration/daily.py" beforeDir="false" afterPath="$PROJECT_DIR$/orchestration/daily.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scripts/benchmark_odds.py" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/benchmark_odds.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scripts/track_performance.py" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/track_performance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/web/app/layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/lib/copy.ts" beforeDir="false" afterPath="$PROJECT_DIR$/web/lib/copy.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

@@ -25,13 +25,13 @@ export const metadata: Metadata = {
     default: `${siteMeta.title} — nightly MLB predictions, scored in public`,
     template: `%s — ${siteMeta.title}`,
   },
-  description: siteMeta.subtitle,
+  description: siteMeta.description,
   openGraph: {
     siteName: siteMeta.title,
     type: "website",
     url: "/",
     title: `${siteMeta.title} — nightly MLB predictions, scored in public`,
-    description: siteMeta.subtitle,
+    description: siteMeta.description,
   },
   // AdSense site verification: the loader script is injected post-hydration,
   // which Google's crawler can't see — this server-rendered meta tag is what

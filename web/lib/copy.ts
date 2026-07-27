@@ -2,13 +2,18 @@
 // lib/translations.ts (en/ja); only language-neutral formatters and the
 // English-only SEO metadata belong here.
 
-// Static export prerenders in English, so search/OG metadata stays English.
+// Search engines and social cards read only the prerendered HTML, and the
+// EN/JA toggle is client-side — one URL serves both languages. So the meta
+// description carries both: engines surface whichever half matches the
+// searcher's query language (and the JA half is the only Japanese text a
+// crawler ever sees on the site).
 export const siteMeta = {
   title: "MLB Model",
-  subtitle:
-    "A machine-learning model picks every MLB game — the winner, the score, " +
-    "and the hitters to watch. Every prediction is logged, graded against the " +
-    "real result, and published. Hits and misses alike.",
+  description:
+    "Nightly machine-learning predictions for every MLB game — winners, " +
+    "scores, run totals, and hitter calls, all graded in public. " +
+    "機械学習モデルがMLBの全試合を毎日予測。勝敗・スコア・合計得点・注目打者の予測を" +
+    "試合前に公開し、実際の結果と照らし合わせて採点しています。",
 };
 
 export function pctLabel(p: number | null | undefined): string {

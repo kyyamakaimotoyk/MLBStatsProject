@@ -117,7 +117,10 @@ def summary():
     engine = get_engine()
     rec = pd.read_sql(text("""
         SELECT g.game_date,
-               (CASE WHEN p.pred_margin > 0 THEN g.home_score > g.away_score
+               -- graded on the published pick (p_home vs .5, same as the feed
+               -- and the record page) — not the margin sign, which can differ
+               -- on pre-clip calibrated rows
+               (CASE WHEN p.p_home >= 0.5 THEN g.home_score > g.away_score
                      ELSE g.home_score < g.away_score END) AS correct,
                abs(g.home_score - g.away_score - p.pred_margin) AS margin_err,
                abs(g.home_score + g.away_score - p.pred_total) AS total_err

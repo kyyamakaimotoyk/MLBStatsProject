@@ -1003,6 +1003,15 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    # Frozen-Elo guard (tuning log 2026-07-27): a snapshot built while
+    # team_strength_pregame lagged the games table silently produced rows
+    # with no Elo — EloBaseline's fillna(0.54) then masked it downstream.
+    n_no_elo = int(df["ELO_P_HOME"].isna().sum()) if "ELO_P_HOME" in df else len(df)
+    if n_no_elo:
+        raise RuntimeError(
+            f"{n_no_elo} feature rows have no pregame Elo — team_strength_pregame "
+            "is stale; run python -m features.team_rating first "
+            "(rebuild order: rating -> park -> features)")
     log.info("built %d rows x %d cols; NaN rate %.1f%%",
              len(df), df.shape[1],
              100 * df.isna().to_numpy().mean())

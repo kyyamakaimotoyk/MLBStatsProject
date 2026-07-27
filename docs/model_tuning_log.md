@@ -706,3 +706,58 @@ no combined feature ship; E15-totals stays parked on its own terms.
 **Wave-5 outcome.** One production ship (the probability head), every
 combination arm closed clean. The cycle's team-side story is complete:
 calibration, not information, was the recoverable edge in public data.
+
+---
+
+## FIX — 2026-07-27 — pick coherence clip + frozen-Elo staleness repair
+
+Two defects surfaced by the live-window drift investigation (verdict there:
+the post-launch dip is the model's precedented post-ASB soft spot — archive
+.5246 in the 11 days after the break, 2023-25 pooled, market .5012 on the
+same games; live 64/138 vs that base p=.17 — recheck ~2026-08-10).
+
+**Defect 1: the "pick" stopped being one thing on 07-23.** The published
+pick is p_home vs .5 (feed + record page), but /api/public/summary,
+/api/performance, track_performance, and benchmark_odds graded by the margin
+sign. E11c's calibrated p_home can cross .5 against pred_margin — the E11c
+"picks untouched" claim held in the pipeline but not on the graded record
+(4 live flips 07-23..26).
+
+**Measurement (archive lgbm_runs+8s + elo+8s @v20260716_083741, 8,713
+games).** Flip zone: 1,296 games (14.9%). Flip-game record: p-pick 663-633
+vs margin-pick 633-663 — a coin toss (p=.42; 2026 slice 116/213, also null).
+Sign-consistency clip (p pinned to the margin side of .5, epsilon 1e-6):
+log loss 0.679972 vs 0.680113 (delta -0.0001, paired p=.53), Brier
+unchanged; mean |p-.5| moved is .0215. No demonstrated benefit from the
+accidental pick-rule change, and the clip is free.
+
+**SHIPPED.**
+- orchestration/daily.py: serve-time clip after cal_p — p_home never crosses
+  .5 against pred_margin; pick == margin sign == p side, everywhere, always.
+- Grading unified on the published rule (p_home >= .5): api/public summary,
+  api/main /api/performance, scripts/track_performance, benchmark_odds.
+  Identical for all pre-E11c rows (raw p = Phi(margin/sigma) shares the
+  margin's sign); only the 4 stored pre-clip live flips grade differently —
+  they grade as published.
+
+**Defect 2: frozen-Elo archive rows + the staleness loop behind them.**
+elo @v20260715_073434 carried 1,444 rows for 2026 games with p_home exactly
+0.54 — EloBaseline's fillna(0.54) firing because the 07-15 snapshot was
+built while team_strength_pregame had no 2026 rows (rebuild-order violation,
+silently masked). Worse, the daily pipeline's weekly bundle retrain reads
+team_strength_pregame via build_features() and nothing refreshed it — every
+retrain trained on Elo frozen at the last manual features.team_rating run
+(~150 games stale and growing at the 07-23 retrain).
+
+**SHIPPED.**
+- DELETEd the 1,444 frozen rows (verified all exactly 0.54 pre-delete;
+  the 7,269 clean 2023-25 rows of that version remain). CAL_P_ARCHIVE
+  (elo+8s @v20260716_083741) was never affected.
+- features/team_rating.py: refresh() extracted; orchestration/daily.py
+  _team_bundle now refreshes team_strength_pregame before every retrain's
+  build_features().
+- features/team_features.py: build_features() now raises when any row lacks
+  pregame Elo (stale table = hard error naming the rebuild order, instead of
+  fillna masking).
+- team_strength_pregame rebuilt through 2026-07-26 (17,357 games, 0 finals
+  uncovered).

@@ -99,10 +99,10 @@ def main() -> None:
     print(f"=== vs closing line, {df['game_date'].min()} .. {df['game_date'].max()} ===\n")
     rows = []
     for (mtype, mver), grp in df.groupby(["model_type", "model_version"]):
-        agree = ((grp["p_home"] > 0.5) == (grp["market_p_home"] > 0.5)).mean()
+        agree = ((grp["p_home"] >= 0.5) == (grp["market_p_home"] > 0.5)).mean()
         rows.append({
             "model": mtype, "version": mver, "n": len(grp),
-            "model_acc": ((grp["pred_margin"] > 0) == grp["home_won"]).mean(),
+            "model_acc": ((grp["p_home"] >= 0.5) == grp["home_won"]).mean(),
             "market_acc": ((grp["market_p_home"] > 0.5) == grp["home_won"]).mean(),
             "model_logloss": -np.mean(np.where(grp["home_won"],
                                                np.log(grp["p_home"].clip(1e-6, 1 - 1e-6)),

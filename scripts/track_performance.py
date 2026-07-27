@@ -36,7 +36,7 @@ def main() -> None:
     if team.empty:
         print(f"no team predictions with results in the last {args.days} days")
     else:
-        team["hit"] = (team["pred_margin"] > 0) == (team["margin"] > 0)
+        team["hit"] = (team["p_home"] >= 0.5) == (team["margin"] > 0)
         team["margin_ae"] = (team["margin"] - team["pred_margin"]).abs()
         team["total_ae"] = (team["total"] - team["pred_total"]).abs()
         summary = team.groupby(["model_type", "model_version"]).agg(

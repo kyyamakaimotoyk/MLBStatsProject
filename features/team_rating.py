@@ -105,8 +105,11 @@ def pregame(ratings: dict, last_season: dict, home: int, away: int,
     return rh, ra, 1.0 / (1.0 + 10 ** (-((rh + HOME_ADV - ra) / 400.0)))
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+def refresh() -> int:
+    """Rebuild team_strength_pregame from all final games — the 'rating' step
+    of the rating -> park -> features rebuild order. Called by the daily
+    pipeline before bundle retrains so build_features() never reads a table
+    that lags the games table (the frozen-Elo incident, tuning log 2026-07-27)."""
     df = build()
     with get_engine().begin() as conn:
         conn.execute(text("DELETE FROM team_strength_pregame"))
@@ -118,6 +121,12 @@ def main() -> None:
             df.to_dict("records"),
         )
     log.info("wrote %d rows to team_strength_pregame", len(df))
+    return len(df)
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    refresh()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 
 Morning run for a target date:
   1. refresh   — import any recent final games + Statcast days (ledger-driven)
-  2. derived   — rebuild park factors (team rating is computed live)
+  2. derived   — rebuild park factors (slate Elo is computed live; bundle
+                 retrains refresh team_strength_pregame first)
   3. slate     — fetch schedule + probables, snapshot to probable_pitchers
   4. team      — load-or-retrain the runs model bundle (weekly staleness cap,
                  the NBA calibration-incident lesson), predict margin/total/
@@ -36,7 +37,7 @@ from core import artifact_store
 from core.db import get_engine
 from core.features import select_features
 from features import batter_features as bf
-from features import park_factors, team_features
+from features import park_factors, team_features, team_rating
 from ingestion import backfill_games, backfill_statcast, statsapi_client
 from modeling import batter_model as bm
 from modeling.team_models import EloBaseline, make
@@ -125,6 +126,9 @@ def _team_bundle(target_date: str) -> dict:
         log.info("team bundle fresh (trained through %s)", bundle["trained_through"])
         return bundle
     log.info("training team models on all data ...")
+    # build_features() reads team_strength_pregame; without this, every weekly
+    # retrain trains on Elo frozen at the last manual features.team_rating run
+    team_rating.refresh()
     df = team_features.build_features()
     feats = select_features(list(df.columns), "team_runs")
     model = make("lgbm_runs")
@@ -395,6 +399,15 @@ def predict_team(slate: pd.DataFrame, target_date: str, asof: str,
         X = np.column_stack([out[0]["pred_margin"].to_numpy(float) / cal["sigma"],
                              np.log(ep / (1 - ep))])
         out[0]["p_home"] = cal["lr"].predict_proba(X)[:, 1]
+        # The published pick is p_home vs .5 and must agree with the margin
+        # head's sign — the calibrator alone crosses .5 against the margin in
+        # 14.9% of archive games, a coin toss either way (663-633; clip
+        # log-loss delta -0.0001, tuning log 2026-07-27). Epsilon keeps the
+        # side unambiguous under both > and >= comparisons.
+        mgn = out[0]["pred_margin"].to_numpy(float)
+        ph = out[0]["p_home"].to_numpy(float)
+        out[0]["p_home"] = np.where(mgn > 0, np.maximum(ph, 0.5 + 1e-6),
+                                    np.minimum(ph, 0.5 - 1e-6))
         if ((out[0]["p_home"] < 0.10) | (out[0]["p_home"] > 0.90)).any():
             warnings.append("lgbm_runs: calibrated p_home outside [0.10, 0.90]")
     all_preds = pd.concat(out, ignore_index=True)

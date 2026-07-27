@@ -117,7 +117,7 @@ def performance(days: int = Query(30, le=365)):
     """Rolling accuracy/MAE per model against final scores."""
     team = _df(f"""
         SELECT p.model_type, p.model_version, count(*) AS n,
-               avg(((p.pred_margin > 0) = (g.home_score > g.away_score))::int) AS win_acc,
+               avg(((p.p_home >= 0.5) = (g.home_score > g.away_score))::int) AS win_acc,
                avg(abs(g.home_score - g.away_score - p.pred_margin)) AS margin_mae,
                avg(abs(g.home_score + g.away_score - p.pred_total)) AS total_mae
         FROM model_predictions p
@@ -138,7 +138,7 @@ def performance(days: int = Query(30, le=365)):
     """, days=days)
 
     market_df = pd.read_sql(text(f"""
-        SELECT p.model_type, p.model_version, p.pred_margin,
+        SELECT p.model_type, p.model_version, p.p_home,
                o.ml_home, o.ml_away,
                g.home_score > g.away_score AS home_won
         FROM model_predictions p
@@ -158,9 +158,9 @@ def performance(days: int = Query(30, le=365)):
         for (mtype, mver), grp in market_df.groupby(["model_type", "model_version"]):
             market.append({
                 "model_type": mtype, "model_version": mver, "n": int(len(grp)),
-                "model_acc": float(((grp["pred_margin"] > 0) == grp["home_won"]).mean()),
+                "model_acc": float(((grp["p_home"] >= 0.5) == grp["home_won"]).mean()),
                 "market_acc": float(((grp["market_p"] > 0.5) == grp["home_won"]).mean()),
-                "pick_agreement": float(((grp["pred_margin"] > 0)
+                "pick_agreement": float(((grp["p_home"] >= 0.5)
                                          == (grp["market_p"] > 0.5)).mean()),
             })
     return {"days": days, "team": team, "batter": batter, "market": market}

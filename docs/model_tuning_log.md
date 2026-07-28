@@ -761,3 +761,116 @@ retrain trained on Elo frozen at the last manual features.team_rating run
   fillna masking).
 - team_strength_pregame rebuilt through 2026-07-26 (17,357 games, 0 finals
   uncovered).
+
+---
+
+## E16 — 2026-07-28 — short-window form deviations (L3/L5/L10/L20): PRE-REGISTERED
+
+**Hypothesis.** Reliability-shrunk short-window deviations from each player's
+OWN long-window baseline add signal to (a) team picks/win probability and
+(b) the per-PA batter model and its game/starter heads. Construction:
+dev = n_W/(n_W + k) x (raw last-W rate − baseline), k per class from the
+alpha atlas (batter K 56 / BB 117 / HR 204 ...; pitcher K 88 / BB 217);
+wOBA devs compose per-class devs with the linear weights (no invented wOBA
+k); 0.0 when the window is empty, never NaN. Baselines: batter shrunken
+L60, per-PA pitcher shrunken L30-app, team SP block career-to-date (all four
+start windows stay non-degenerate). Pre-registered judgment ballasts:
+K_XWCON = 60 BBE, K_VELO = 40 fastballs, K_WOBA_SP = 391 BF (pitcher HIT k
+as proxy — _load_starts has no per-class counts; noted asymmetry). Surfaces:
+LINEUP_L{W}_DEV_WOBA (slot-PA-weighted SUM, the E5b magnitude-preserving
+pattern) + SP_L{W}_DEV_{K,BB,WOBA,VELO} per side on the team snapshot;
+B_DEV_L{W}_{WOBA,K,HR,XWCON} + P_DEV_L{W}_{K,BB,WOBA,VELO} per-PA.
+
+**Honest null expectation (falsification arm).** Brown 2008 [A1]:
+month-constant ability, one-month averages almost pure noise; his 10-day
+streakiness (32/419 batters) called "too short-horizon to exploit as a
+pregame feature" — the L3 arm tests that claim directly. Glickman-Stern
+[R-A4, denied-but-retained]: beta_w ~ 1, sigma_w/tau ~ 0.07. In-house: E8a
+form-family AUC dilution; E13 deliberately did not run within-season decay
+on these priors. Under nulls the value is the per-window map + star-slice
+report (docs/e16_form_deviations_2026-07.md).
+
+**Setup.** Flags dev_l3/l5/l10/l20 (default False; prefixes in
+core/features.py). Arms: base / L3 / L5 / L10 / L20 / ALL(all four flags).
+One snapshot rebuild carrying all gated columns (no --set-current; default
+column set unchanged, so lgbm_runs+8s @v20260716_083741 carries over as the
+paired team baseline). Gates before any arm: scripts/test_leakage.py PASS +
+new scripts/test_leakage_batter.py PASS (first per-PA leakage gate) +
+flags-off column-identity check vs v20260716_083741. Team arms:
+walkforward --enable-flags, tags +dv{l3,l5,l10,l20,all}8[_sN]; ablation
+selection on --seasons 2023,2024,2025 ONLY (E8d hygiene), 2026 confirm-only,
+--months 3,4,5,6 diagnostic. Batter arms: walkforward_batter --enable-flags
+--compare-base (new; paired flags-ON/OFF per season, selection <=2025 and
+2026 verdicts split in-run), --version e16_<arm>, seasons 2023-2026.
+Primaries: team margin MAE (paired-t) + AUC (bootstrap) + p_home log loss;
+batter per-PA log loss + hits/K MAE + starter-K MAE. Seed-0 screen all six
+arms; seeds 1/2 only for arms clearing p<.05 on a primary in the selection
+pool; ship bar = p<.05 + direction consistent 0/1/2; simpler-ships (ALL
+ships only if it beats the best single window head-to-head). Standing
+caveat: per-comparison p-values, no family-wise correction — acute at 6 arms.
+
+**Result — team (selection 2023-2025, 7,269 paired games vs lgbm_runs+8s
+@v20260716_083741; arms @v20260728_015745, leakage PASS 11,854 x 243,
+carry-over identity PASS at 95 flags-off features).**
+
+| arm | pooled selection verdict |
+|---|---|
+| +dvl38 | null (acc p=.73, margin p=.53, AUC p=.69, LL p=.75) |
+| +dvl58 | null (acc -0.47pp p=.15, rest null) |
+| +dvl108 | acc .5587 vs .5654, **McNemar p=.038 WORSE**; AUC +.0011 p=.48 — the E8a dilution signature |
+| +dvl208 | null |
+| +dvall8 | null (acc -0.54pp p=.15, totals +.005 p=.17) |
+
+No positive arm; no seed spend (E15/E9a precedent). **Team arms all
+REJECTED** — as pre-registered. Window combination gains nothing at team
+level.
+
+**Result — batter (selection <=2025: 559,251 PAs / 130,950 batter-games;
+paired flags-ON/OFF in-run).** Seed-0 screen: L3 LL p=.0014 + spK p=.016
+(but hits MAE +.0003 p=.0013 worse); L5 LL p=.0041; L20 K MAE p=.039 only;
+L10 LL null + hits p=.016 worse; ALL LL p=.0003 + spK p=.015. Survivors
+L3/L5/ALL to seeds 1/2 (L20 parked: single marginal metric under the
+no-correction caveat; L10 rejected).
+
+**Significance (per-PA log loss, paired-t, direction never flips).**
+
+| arm | s0 | s1 | s2 | 2026 confirm (s0/s1/s2) |
+|---|---|---|---|---|
+| dev_l3 | **p=.0014** | **p=.0063** | **p=.0011** | **p=.0076 / .0005 / .0011** |
+| dev_l5 | **p=.0041** | **p=.0006** | **p=.0129** | p=.0016 s0 |
+| ALL | **p=.0003** | **p=.0237** | **p=.0079** | p=.0482 s0 |
+
+Deltas ~-.0003 (B6 scale), LARGER on the 2026 holdout (~-.0007) — the live
+season rewards the recency signal. Starter-K MAE: L3 -.0044..-.0046
+(p=.016/.16/.010 — 2/3 seeds, direction 3/3). L3's seed-0 hits-MAE harm
+collapses at s1 (p=.13) / s2 (p=.60) — seed noise, the inverse E10 pattern.
+ALL's mean LL across seeds (1.47034) is inseparable from L3's (1.47035):
+ALL does not beat the best single window head-to-head. L5 ties L3 on LL
+(-.00032 both) with weaker spK consistency (s0 p=.59).
+
+**Decision.**
+- **SHIPPED: dev_l3 for the per-PA surfaces** (simpler-ships: one window,
+  8 columns; strongest holdout; spK support; recency lives at ~3 games —
+  Brown's 10-day streakiness horizon, refuting "too short to exploit" for
+  the per-PA objective). Flag split dev_l3 (B_DEV_L3_/P_DEV_L3_, True) vs
+  dev_l3_team (team prefixes, False) — the lineup_platoon granularity
+  precedent, honest to the team null. Serve path: build_asof mirrors gated
+  by the same flag; the batter bundle picks the columns up at its next
+  retrain (pipeline image rebuild required for prod).
+- PARKED: dev_l5, ALL (confirmed but inseparable from dev_l3), dev_l20
+  (marginal single metric, no seed spend). REJECTED: dev_l10 (both
+  surfaces), all team arms.
+- Queued E16b: pitcher-only vs batter-only dev decomposition — spK gains
+  and star-slice tables (batter stat-line MAEs flat) both suggest the LL
+  signal is pitcher-side (velo/K form, the fatigue tell). Do not re-run
+  team short-window form without new data.
+- Report: docs/e16_form_deviations_2026-07.md (per-window x season tables,
+  star slices top-5 SLG/OBP/AVG batters + ERA/K-BB%/WHIP pitchers,
+  2023-2026). Stored: team +dv{l3,l5,l10,l20,all}8 @v20260728_015745;
+  batter preds kept e16_base/e16_l3/e16_all, deleted e16_{l5,l10,l20}
+  (registry rows all kept). W-L pitcher ranking deferred (decisions not
+  ingested; GUMBO reprocess is the queued path).
+- Ops: leakage-gate rebuilds race the scores-only Fargate ticks (the
+  frozen-Elo guard caught it; refresh team_rating and rerun). Windows
+  cp932 stdout cannot print em-dashes — harness prints are ASCII-only now;
+  runners export PYTHONIOENCODING=utf-8.

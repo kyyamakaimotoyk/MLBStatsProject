@@ -85,27 +85,38 @@ def _load_offense(max_date):
 
 
 def _load_starts(max_date):
-    """One row per start: boxscore rates + Statcast quality-against."""
+    """One row per start: boxscore rates + Statcast quality-against.
+    fb_velo_sum/fb_n (E16 velo devs) are per-game aggregates intrinsic to
+    their game, so the same point-in-time argument as woba_num applies:
+    they only join to starts that pass the max_date filter."""
+    from sqlalchemy import bindparam
+
+    from features.batter_features import FASTBALLS
+
     sql = """
         SELECT p.player_id AS pitcher_id, p.game_pk, g.game_date,
                p.batters_faced AS bf, p.so, p.bb, p.er, p.outs,
-               sc.woba_num, sc.woba_den, sc.xwoba_num, sc.bbe
+               sc.woba_num, sc.woba_den, sc.xwoba_num, sc.bbe,
+               sc.fb_velo_sum, sc.fb_n
         FROM pitcher_game_lines p
         JOIN games g ON g.game_pk = p.game_pk
         LEFT JOIN (
             SELECT pitcher_id, game_pk,
                    SUM(woba_value::float8) AS woba_num, SUM(woba_denom::float8) AS woba_den,
                    SUM(estimated_woba_using_speedangle::float8) AS xwoba_num,
-                   COUNT(estimated_woba_using_speedangle) AS bbe
+                   COUNT(estimated_woba_using_speedangle) AS bbe,
+                   SUM(release_speed::float8) FILTER (WHERE pitch_type IN :fb) AS fb_velo_sum,
+                   COUNT(release_speed) FILTER (WHERE pitch_type IN :fb) AS fb_n
             FROM statcast_pitches GROUP BY 1, 2
         ) sc ON sc.pitcher_id = p.player_id AND sc.game_pk = p.game_pk
         WHERE p.is_starter AND g.is_final
     """
-    params = {}
+    params = {"fb": list(FASTBALLS)}
     if max_date:
         sql += " AND g.game_date <= :max_date"
         params["max_date"] = max_date
-    df = pd.read_sql(text(sql), get_engine(), params=params)
+    stmt = text(sql).bindparams(bindparam("fb", expanding=True))
+    df = pd.read_sql(stmt, get_engine(), params=params)
     df["game_date"] = pd.to_datetime(df["game_date"])
     return df.sort_values(["pitcher_id", "game_date", "game_pk"]).reset_index(drop=True)
 
@@ -493,12 +504,24 @@ def _team_date_lookup(team_games: pd.DataFrame):
 
 def _sp_lookup(starts: pd.DataFrame):
     """pitcher_id -> arrays; returns lookup(pitcher_id, game_date) -> SP dict."""
+    from features.batter_features import ATLAS_K_PITCHER, DEV_WINDOWS, K_VELO
+
+    # E16 dev specs: (name, num, den, ballast). n units are the denominator
+    # (BF for K/BB, wOBA denom for wOBA, fastballs for velo). wOBA uses the
+    # pitcher HIT k as proxy ballast — _load_starts has no per-class counts,
+    # so class-level composition isn't available here (noted asymmetry vs the
+    # per-PA builder; tuning log E16).
+    sp_dev_specs = (("K", "so", "bf", ATLAS_K_PITCHER["K"]),
+                    ("BB", "bb", "bf", ATLAS_K_PITCHER["BB"]),
+                    ("WOBA", "woba_num", "woba_den", 391.0),
+                    ("VELO", "fb_velo_sum", "fb_n", K_VELO))
+
     book = {}
     for pid, grp in starts.groupby("pitcher_id", sort=False):
         g = grp.reset_index(drop=True)
         arrays = {c: np.concatenate([[0.0], np.nancumsum(g[c].to_numpy(float))])
                   for c in ("bf", "so", "bb", "er", "outs", "woba_num", "woba_den",
-                            "xwoba_num", "bbe")}
+                            "xwoba_num", "bbe", "fb_velo_sum", "fb_n")}
         book[pid] = (g["game_date"].to_numpy(), arrays)
 
     def lookup(pid, game_date):
@@ -523,6 +546,20 @@ def _sp_lookup(starts: pd.DataFrame):
             row["SP_WOBA_AGAINST_L10"] = s["woba_num"] / s["woba_den"]
         if s["bbe"]:
             row["SP_XWOBA_CON_AGAINST_L10"] = s["xwoba_num"] / s["bbe"]
+        # E16 (flags dev_l*): last-W-starts rates vs CAREER-to-date rates,
+        # alpha-shrunk. hi <= W makes window == career, so dev = 0 exactly
+        # (debut SPs get zeros, not NaN); empty denominators likewise 0.0.
+        for dw in DEV_WINDOWS:
+            lo_w = max(0, hi - dw)
+            for name, num, den, k in sp_dev_specs:
+                n_w = cum[den][hi] - cum[den][lo_w]
+                n_c = cum[den][hi]
+                if n_w and n_c:
+                    raw = (cum[num][hi] - cum[num][lo_w]) / n_w
+                    career = cum[num][hi] / n_c
+                    row[f"SP_L{dw}_DEV_{name}"] = n_w / (n_w + k) * (raw - career)
+                else:
+                    row[f"SP_L{dw}_DEV_{name}"] = 0.0
         return row
 
     return lookup
@@ -620,13 +657,18 @@ BLEND_COLS = ["BLEND_RUNS_PG", "BLEND_RA_PG", "BLEND_WOBA", "BLEND_XWOBA_CON",
 DEF_COLS = ["DEF_BABIP_AGAINST_L30", "DEF_BABIP_AGAINST_SEASON",
             "DEF_XHITS_SAVED_L30", "DEF_XHITS_SAVED_SEASON"]
 SP_STUFF_COLS = ["SP_STUFF_RV", "SP_LOC_RV", "SP_PITCH_RV"]  # E15, flag 'sp_stuff'
+# E16 (flags dev_l3/l5/l10/l20): short-window form deviations. Windows must
+# match batter_features.DEV_WINDOWS; window-early names are the flag prefixes.
+DEV_FORM_COLS = [f"LINEUP_L{w}_DEV_WOBA" for w in (3, 5, 10, 20)] + \
+                [f"SP_L{w}_DEV_{s}" for w in (3, 5, 10, 20)
+                 for s in ("K", "BB", "WOBA", "VELO")]
 SIDE_COLS = TEAM_ROLL_COLS + [
     "GAME_NUM", "BP_PITCHES_L3", "BP_ERA_L30",
     "SP_KNOWN", "SP_N_STARTS", "SP_K_PCT_L10", "SP_BB_PCT_L10", "SP_ERA_L10",
     "SP_WOBA_AGAINST_L10", "SP_XWOBA_CON_AGAINST_L10", "SP_IP_PER_START_L10",
     "SP_DAYS_REST", "SP_THROWS_L",
     "TRAVEL_KM", "TRAVEL_TZ_DELTA",  # E8e, flag-gated 'travel'
-] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS + LINEUP_COLS
+] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS + LINEUP_COLS + DEV_FORM_COLS
 DIFF_COLS = [
     "RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
     "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30", "BP_ERA_L30",
@@ -637,7 +679,7 @@ DIFF_COLS = [
     "LINEUP_N_REG_OUT", "LINEUP_VS_HAND_WOBA", "LINEUP_VS_HAND_DEV",
     "LINEUP_SAME_HAND_SHARE",
     "LINEUP_XR",
-] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS
+] + SP_STUFF_COLS + PRIOR_COLS + BLEND_COLS + DEF_COLS + DEV_FORM_COLS
 
 # Linear wOBA weights (league-era constants) and expected PAs by lineup slot.
 WOBA_WEIGHTS = {"BB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
@@ -827,6 +869,14 @@ def _lineup_strength(max_date) -> dict:
         dev = grp["woba_dev"].to_numpy(float)
         m = ~np.isnan(dev)
         row["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
+        # E16 (flags dev_l*): same masked slot-weighted SUM over the posted
+        # nine's short-window form deviations (per-batter devs are 0.0 when
+        # the window is empty, so absent-from-b_rates is the only NaN source)
+        for dw in bf.DEV_WINDOWS:
+            v = grp[f"B_DEV_L{dw}_WOBA"].to_numpy(float)
+            m = ~np.isnan(v)
+            row[f"LINEUP_L{dw}_DEV_WOBA"] = (float((v[m] * w[m]).sum())
+                                             if m.any() else np.nan)
         # E5c: platoon block vs the opposing probable's hand
         hand = opp_hand.get((game_pk, team_id))
         if hand in ("L", "R"):
@@ -1068,6 +1118,12 @@ def lineup_strength_asof(asof_date: str, projected: pd.DataFrame,
         dev = rows["woba_dev"].to_numpy(float)
         m = ~np.isnan(dev)
         vals["LINEUP_DEV_WOBA"] = float((dev[m] * w[m]).sum()) if m.any() else np.nan
+        # E16: serve-path mirror of the historical LINEUP_L*_DEV_WOBA sums
+        for dw in bf.DEV_WINDOWS:
+            v = rows[f"B_DEV_L{dw}_WOBA"].to_numpy(float)
+            m = ~np.isnan(v)
+            vals[f"LINEUP_L{dw}_DEV_WOBA"] = (float((v[m] * w[m]).sum())
+                                              if m.any() else np.nan)
 
         hand = opp_hand.get((game_pk, team_id))
         if hand in ("L", "R"):

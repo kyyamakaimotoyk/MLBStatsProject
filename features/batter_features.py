@@ -15,11 +15,11 @@ Shrinkage: empirical Bayes toward the expanding league rate,
 rate = (count + W * league_rate) / (n + W), with W in PA units
 (SHRINK_OVERALL for full profiles, SHRINK_SPLIT for noisier platoon splits).
 
-Not snapshotted to the feature store: 740k rows x 40 features as JSONB is
+Not snapshotted to the feature store: 740k rows x 40+ features as JSONB is
 ~700MB per version on a t4g.micro. The build is deterministic from versioned
-code + the DB, and scripts/test_leakage.py covers the same point-in-time
-mechanics for the team builder; a batter-side leakage spot check lives in
-validation/walkforward_batter.py --leakage-check.
+code + the DB; scripts/test_leakage.py covers the team builder and
+scripts/test_leakage_batter.py gates this frame (full vs max_date-truncated
+build identity on pre-cutoff rows).
 """
 
 import logging
@@ -51,6 +51,22 @@ B_WINDOW = 60    # batter: last N games (~250 PA for a regular)
 P_WINDOW = 30    # pitcher: last N appearances (~750 BF for a starter)
 SHRINK_OVERALL = 150.0
 SHRINK_SPLIT = 300.0
+
+# E16 (flags dev_l3/l5/l10/l20): short-window deviations from the player's
+# OWN long-window baseline, dev = n/(n+k) x (raw_window_rate - baseline),
+# exactly 0.0 when the window is empty (never NaN — no evidence of deviation).
+# k per class from the alpha atlas (docs/alpha_atlas_2026-07.md); wOBA devs
+# compose per-class devs with the linear weights rather than inventing a
+# wOBA k. K_XWCON / K_VELO are pre-registered judgment ballasts (tuning log
+# E16): contact quality stabilizes in tens of BBE; velo is a measurement and
+# the ballast only damps 1-2-pitch flukes.
+DEV_WINDOWS = (3, 5, 10, 20)
+ATLAS_K_BATTER = {"K": 56.0, "BB": 117.0, "HBP": 242.0, "1B": 240.0,
+                  "2B": 1940.0, "3B": 584.0, "HR": 204.0}
+ATLAS_K_PITCHER = {"K": 88.0, "BB": 217.0, "HBP": 581.0, "1B": 454.0,
+                   "2B": 1430.0, "3B": 2558.0, "HR": 847.0}
+K_XWCON = 60.0
+K_VELO = 40.0
 
 DAY = np.timedelta64(1, "D")
 
@@ -131,16 +147,31 @@ def _league_prior(pa: pd.DataFrame):
 
 
 def _rolling_rates(per_game: pd.DataFrame, player_col: str, window: int,
-                   prior, suffixes: tuple[str, ...] = ("", "_vsL", "_vsR")) -> pd.DataFrame:
+                   prior, suffixes: tuple[str, ...] = ("", "_vsL", "_vsR"),
+                   dev_windows: tuple[int, ...] = (), dev_ks: dict | None = None,
+                   dev_woba_weights: dict | None = None,
+                   dev_extra: tuple[str, ...] = ()) -> pd.DataFrame:
     """Shrunken rolling class rates per (player, game).
 
     per_game must be sorted by (player, game_date, game_pk) — groups are then
     contiguous, so results are filled positionally into preallocated arrays
     (a dict-of-records here costs ~700MB for 200k batter-games).
+
+    dev_windows (E16): also emit DEV_L{W}_WOBA plus DEV_L{W}_{c} for c in
+    dev_extra — the alpha-shrunk deviation of the raw last-W-games rate from
+    the shrunken `window` baseline computed in the same row. Computed inside
+    this single pass (the loop is the build's hot spot; never add a second).
     """
     n_rows = len(per_game)
     out = {f"rate_{c}{sfx}": np.full(n_rows, np.nan) for sfx in suffixes for c in CLASSES}
     out.update({f"pa{sfx}": np.zeros(n_rows) for sfx in suffixes})
+    dev_classes: list[str] = []
+    if dev_windows:
+        dev_classes = sorted(set(dev_woba_weights) | set(dev_extra))
+        for dw in dev_windows:
+            out[f"DEV_L{dw}_WOBA"] = np.zeros(n_rows)
+            for c in dev_extra:
+                out[f"DEV_L{dw}_{c}"] = np.zeros(n_rows)
     pos = 0
     for _, grp in per_game.groupby(player_col, sort=False):
         g = grp.reset_index(drop=True)
@@ -159,6 +190,20 @@ def _rolling_rates(per_game: pd.DataFrame, player_col: str, window: int,
                 for ci, c in enumerate(CLASSES):
                     cnt = cums[f"{c}{sfx}"][cut] - cums[f"{c}{sfx}"][lo]
                     out[f"rate_{c}{sfx}"][row_pos] = (cnt + w * league[ci]) / (n + w)
+            for dw in dev_windows:
+                lo_w = max(0, cut - dw)
+                n_w = cums["pa"][cut] - cums["pa"][lo_w]
+                if not n_w:
+                    continue  # preallocated 0.0 = no evidence of deviation
+                woba_dev = 0.0
+                for c in dev_classes:
+                    raw = (cums[c][cut] - cums[c][lo_w]) / n_w
+                    d = n_w / (n_w + dev_ks[c]) * (raw - out[f"rate_{c}"][row_pos])
+                    if c in dev_woba_weights:
+                        woba_dev += dev_woba_weights[c] * d
+                    if c in dev_extra:
+                        out[f"DEV_L{dw}_{c}"][row_pos] = d
+                out[f"DEV_L{dw}_WOBA"][row_pos] = woba_dev
         pos += len(g)
     return pd.DataFrame({player_col: per_game[player_col].to_numpy(),
                          "game_pk": per_game["game_pk"].to_numpy(), **out})
@@ -236,16 +281,25 @@ def _pitcher_arsenal(max_date):
 
 
 def _rolling_ratio_lookup(per_game: pd.DataFrame, player_col: str, window: int,
-                          ratios: dict[str, tuple[str, str]]) -> pd.DataFrame:
+                          ratios: dict[str, tuple[str, str]],
+                          dev_specs: dict[str, tuple] | None = None) -> pd.DataFrame:
     """Rolling (num/den) ratios per (player, game) — for statcast quality cols.
-    Same contiguous-group positional filling as _rolling_rates."""
+    Same contiguous-group positional filling as _rolling_rates.
+
+    dev_specs (E16): {final_col: (num, den, k, baseline_col, dev_window)} —
+    alpha-shrunk deviation of the last-dev_window ratio from the baseline
+    ratio computed in the same row (n = the window's denominator). 0.0 when
+    the window has no denominator or the baseline is NaN.
+    """
     n_rows = len(per_game)
     out = {col: np.full(n_rows, np.nan) for col in ratios}
+    out.update({col: np.zeros(n_rows) for col in (dev_specs or ())})
     pos = 0
     for _, grp in per_game.groupby(player_col, sort=False):
         g = grp.reset_index(drop=True)
         dates = g["game_date"].to_numpy()
         cols = {c for pair in ratios.values() for c in pair}
+        cols |= {c for spec in (dev_specs or {}).values() for c in spec[:2]}
         cums = {col: np.concatenate([[0.0], g[col].fillna(0).to_numpy(float).cumsum()])
                 for col in cols}
         for i in range(len(g)):
@@ -255,6 +309,13 @@ def _rolling_ratio_lookup(per_game: pd.DataFrame, player_col: str, window: int,
                 d = cums[den][cut] - cums[den][lo]
                 if d:
                     out[out_col][pos + i] = (cums[num][cut] - cums[num][lo]) / d
+            for out_col, (num, den, k, base_col, dw) in (dev_specs or {}).items():
+                lo_w = max(0, cut - dw)
+                n_w = cums[den][cut] - cums[den][lo_w]
+                base = out[base_col][pos + i]
+                if n_w and not np.isnan(base):
+                    raw = (cums[num][cut] - cums[num][lo_w]) / n_w
+                    out[out_col][pos + i] = n_w / (n_w + k) * (raw - base)
         pos += len(g)
     return pd.DataFrame({player_col: per_game[player_col].to_numpy(),
                          "game_pk": per_game["game_pk"].to_numpy(), **out})
@@ -263,30 +324,43 @@ def _rolling_ratio_lookup(per_game: pd.DataFrame, player_col: str, window: int,
 def build(max_date: str | None = None) -> dict:
     """Returns dict with 'pa' (training frame incl. TARGET_CLASS + features)
     and the keyed component frames for prediction-time assembly."""
+    from features.team_features import WOBA_WEIGHTS  # function-local, house style
+
     pa = load_pa(max_date)
     prior = _league_prior(pa)
 
     log.info("rolling batter rates ...")
     b_counts = _per_game_counts(pa, "batter_id", "pitch_hand")
-    b_rates = _rolling_rates(b_counts, "batter_id", B_WINDOW, prior)
+    b_rates = _rolling_rates(b_counts, "batter_id", B_WINDOW, prior,
+                             dev_windows=DEV_WINDOWS, dev_ks=ATLAS_K_BATTER,
+                             dev_woba_weights=WOBA_WEIGHTS, dev_extra=("K", "HR"))
     b_rates = b_rates.add_prefix("B_").rename(
         columns={"B_batter_id": "batter_id", "B_game_pk": "game_pk"})
 
     log.info("rolling pitcher rates ...")
     p_counts = _per_game_counts(pa, "pitcher_id", "bat_side")
-    p_rates = _rolling_rates(p_counts, "pitcher_id", P_WINDOW, prior)
+    p_rates = _rolling_rates(p_counts, "pitcher_id", P_WINDOW, prior,
+                             dev_windows=DEV_WINDOWS, dev_ks=ATLAS_K_PITCHER,
+                             dev_woba_weights=WOBA_WEIGHTS, dev_extra=("K", "BB"))
     p_rates = p_rates.add_prefix("P_").rename(
         columns={"P_pitcher_id": "pitcher_id", "P_game_pk": "game_pk"})
 
     log.info("statcast quality blocks ...")
     b_sc = _rolling_ratio_lookup(_batter_statcast(max_date), "batter_id", B_WINDOW,
-                                 BATTER_SC_RATIOS)
+                                 BATTER_SC_RATIOS,
+                                 dev_specs={f"B_DEV_L{w}_XWCON":
+                                            ("xwoba_num", "bbe", K_XWCON,
+                                             "B_XWOBA_CON", w)
+                                            for w in DEV_WINDOWS})
     ars = _rolling_ratio_lookup(
         _pitcher_arsenal(max_date), "pitcher_id", P_WINDOW,
         {"P_FB_VELO": ("fb_velo_sum", "fb_n"),
          "P_BREAKING_PCT": ("breaking_n", "pitches"),
          "P_OFFSPEED_PCT": ("offspeed_n", "pitches"),
-         "P_WHIFF_RATE": ("whiffs", "swings")})
+         "P_WHIFF_RATE": ("whiffs", "swings")},
+        dev_specs={f"P_DEV_L{w}_VELO": ("fb_velo_sum", "fb_n", K_VELO,
+                                        "P_FB_VELO", w)
+                   for w in DEV_WINDOWS})
 
     park = pd.read_sql(text("SELECT season, venue_id, pf_runs FROM park_factors"),
                        get_engine())
@@ -333,9 +407,13 @@ def build(max_date: str | None = None) -> dict:
 
 
 def _asof_rates(per_game: pd.DataFrame, player_col: str, window: int,
-                league: np.ndarray) -> pd.DataFrame:
+                league: np.ndarray, dev_windows: tuple[int, ...] = (),
+                dev_ks: dict | None = None, dev_woba_weights: dict | None = None,
+                dev_extra: tuple[str, ...] = ()) -> pd.DataFrame:
     """One shrunken-rate row per player over their last `window` games
-    through the data cutoff — for predicting games AFTER that cutoff."""
+    through the data cutoff — for predicting games AFTER that cutoff.
+    dev_windows: the E16 deviation mirror of _rolling_rates, from last-W
+    tails vs the `window` baseline computed here."""
     cols = [f"{c}{sfx}" for sfx in ("", "_vsL", "_vsR") for c in CLASSES + ["pa"]]
     tail = per_game.groupby(player_col, sort=False).tail(window)
     sums = tail.groupby(player_col, sort=False)[cols].sum()
@@ -346,44 +424,101 @@ def _asof_rates(per_game: pd.DataFrame, player_col: str, window: int,
         out[f"pa{sfx}"] = n
         for ci, c in enumerate(CLASSES):
             out[f"rate_{c}{sfx}"] = (sums[f"{c}{sfx}"] + w * league[ci]) / (n + w)
+    if dev_windows:
+        dev_classes = sorted(set(dev_woba_weights) | set(dev_extra))
+        for dw in dev_windows:
+            sw = (per_game.groupby(player_col, sort=False).tail(dw)
+                  .groupby(player_col, sort=False)[list(CLASSES) + ["pa"]].sum()
+                  .reindex(sums.index))
+            n_w = np.nan_to_num(sw["pa"].to_numpy(float))
+            pos = n_w > 0
+            woba_dev = np.zeros(len(sums))
+            for c in dev_classes:
+                raw = np.divide(np.nan_to_num(sw[c].to_numpy(float)), n_w,
+                                out=np.zeros_like(n_w), where=pos)
+                d = np.zeros_like(n_w)
+                base = out[f"rate_{c}"].to_numpy(float)
+                d[pos] = (n_w[pos] / (n_w[pos] + dev_ks[c])
+                          * (raw[pos] - base[pos]))
+                if c in dev_woba_weights:
+                    woba_dev += dev_woba_weights[c] * d
+                if c in dev_extra:
+                    out[f"DEV_L{dw}_{c}"] = d
+            out[f"DEV_L{dw}_WOBA"] = woba_dev
     return out.reset_index()
 
 
 def _asof_ratios(per_game: pd.DataFrame, player_col: str, window: int,
-                 ratios: dict[str, tuple[str, str]]) -> pd.DataFrame:
+                 ratios: dict[str, tuple[str, str]],
+                 dev_specs: dict[str, tuple] | None = None) -> pd.DataFrame:
     tail = per_game.groupby(player_col, sort=False).tail(window)
     cols = list({c for pair in ratios.values() for c in pair})
     sums = tail.groupby(player_col, sort=False)[cols].sum()
     out = pd.DataFrame(index=sums.index)
     for out_col, (num, den) in ratios.items():
         out[out_col] = np.where(sums[den] > 0, sums[num] / sums[den], np.nan)
+    for out_col, (num, den, k, base_col, dw) in (dev_specs or {}).items():
+        sw = (per_game.groupby(player_col, sort=False).tail(dw)
+              .groupby(player_col, sort=False)[[num, den]].sum()
+              .reindex(sums.index))
+        n_w = np.nan_to_num(sw[den].to_numpy(float))
+        base = out[base_col].to_numpy(float)
+        raw = np.divide(np.nan_to_num(sw[num].to_numpy(float)), n_w,
+                        out=np.zeros_like(n_w), where=n_w > 0)
+        d = np.zeros_like(n_w)
+        m = (n_w > 0) & ~np.isnan(base)
+        d[m] = n_w[m] / (n_w[m] + k) * (raw[m] - base[m])
+        out[out_col] = d
     return out.reset_index()
 
 
 def build_asof(asof_date: str) -> dict:
     """Per-player components (through asof_date) for pregame prediction.
     Same column names as build()'s per-game components, minus game_pk."""
+    from features.team_features import WOBA_WEIGHTS  # function-local, house style
+
     pa = load_pa(max_date=asof_date)
     prior = _league_prior(pa)
     league = prior(np.datetime64(pd.Timestamp(asof_date) + pd.Timedelta(days=1)))
 
     b = _asof_rates(_per_game_counts(pa, "batter_id", "pitch_hand"),
-                    "batter_id", B_WINDOW, league)
+                    "batter_id", B_WINDOW, league,
+                    dev_windows=DEV_WINDOWS, dev_ks=ATLAS_K_BATTER,
+                    dev_woba_weights=WOBA_WEIGHTS, dev_extra=("K", "HR"))
     b = b.add_prefix("B_").rename(columns={"B_batter_id": "batter_id"})
     p = _asof_rates(_per_game_counts(pa, "pitcher_id", "bat_side"),
-                    "pitcher_id", P_WINDOW, league)
+                    "pitcher_id", P_WINDOW, league,
+                    dev_windows=DEV_WINDOWS, dev_ks=ATLAS_K_PITCHER,
+                    dev_woba_weights=WOBA_WEIGHTS, dev_extra=("K", "BB"))
     p = p.add_prefix("P_").rename(columns={"P_pitcher_id": "pitcher_id"})
     b_sc = _asof_ratios(_batter_statcast(asof_date), "batter_id", B_WINDOW,
-                        BATTER_SC_RATIOS)
+                        BATTER_SC_RATIOS,
+                        dev_specs={f"B_DEV_L{w}_XWCON":
+                                   ("xwoba_num", "bbe", K_XWCON,
+                                    "B_XWOBA_CON", w) for w in DEV_WINDOWS})
     ars = _asof_ratios(_pitcher_arsenal(asof_date), "pitcher_id", P_WINDOW,
                        {"P_FB_VELO": ("fb_velo_sum", "fb_n"),
                         "P_BREAKING_PCT": ("breaking_n", "pitches"),
                         "P_OFFSPEED_PCT": ("offspeed_n", "pitches"),
-                        "P_WHIFF_RATE": ("whiffs", "swings")})
+                        "P_WHIFF_RATE": ("whiffs", "swings")},
+                       dev_specs={f"P_DEV_L{w}_VELO":
+                                  ("fb_velo_sum", "fb_n", K_VELO,
+                                   "P_FB_VELO", w) for w in DEV_WINDOWS})
     park = pd.read_sql(text("SELECT season, venue_id, pf_runs FROM park_factors"),
                        get_engine())
     return {"pa": pa, "b_rates": b, "p_rates": p, "b_sc": b_sc,
             "arsenal": ars, "park": park}
+
+
+def dev_feature_columns() -> list[str]:
+    """E16 flag-gated deviation columns (flags dev_l3/l5/l10/l20)."""
+    cols = []
+    for w in DEV_WINDOWS:
+        cols += [f"B_DEV_L{w}_WOBA", f"B_DEV_L{w}_K", f"B_DEV_L{w}_HR",
+                 f"B_DEV_L{w}_XWCON",
+                 f"P_DEV_L{w}_K", f"P_DEV_L{w}_BB", f"P_DEV_L{w}_WOBA",
+                 f"P_DEV_L{w}_VELO"]
+    return cols
 
 
 def feature_columns() -> list[str]:
@@ -394,4 +529,5 @@ def feature_columns() -> list[str]:
              "P_BF_N", "P_BF_VS_SIDE",
              "P_FB_VELO", "P_BREAKING_PCT", "P_OFFSPEED_PCT", "P_WHIFF_RATE",
              "SAME_HAND", "IS_HOME", "PARK_PF_RUNS"]
+    cols += dev_feature_columns()
     return cols

@@ -36,6 +36,19 @@ FEATURE_FLAGS: dict[str, bool] = {
     "defense": False,       # B9a: team BABIP-against + xHits-saved
     "lineup_xr": False,     # LINEUP_XR: Markov lineup expected runs
     "sp_stuff": False,      # E15: process-based SP quality (in-house Stuff+)
+    # E16: short-window form deviations from each player's own long-window
+    # baseline (pre-registered null expectation — Brown A1, Glickman-Stern
+    # R-A4, E8a form dilution). One flag per window so arms stay isolated.
+    # dev_l3 SHIPPED 2026-07-28 for the PER-PA surfaces only: per-PA log loss
+    # p=.0014/.0063/.0011 at seeds 0/1/2, 2026 holdout p=.0076/.0005/.0011,
+    # starter-K MAE −.004 (2/3 seeds + direction 3/3). The team arm was null,
+    # so the team half stays gated behind dev_l3_team (the lineup_platoon
+    # granularity precedent).
+    "dev_l3": True,
+    "dev_l3_team": False,
+    "dev_l5": False,
+    "dev_l10": False,
+    "dev_l20": False,
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "umpire": ("UMP_",),
@@ -58,6 +71,22 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "sp_stuff": ("HOME_SP_STUFF", "AWAY_SP_STUFF", "DIFF_SP_STUFF",
                  "HOME_SP_LOC", "AWAY_SP_LOC", "DIFF_SP_LOC",
                  "HOME_SP_PITCH", "AWAY_SP_PITCH", "DIFF_SP_PITCH"),
+    # E16: window-early naming (SP_L3_DEV_K, not SP_DEV_K_L3) is deliberate —
+    # gating is startswith, so the window must live in the prefix. Trailing
+    # underscores stop cross-window capture; the lineup_platoon trick applies
+    # (a disabled dev flag strips its LINEUP_ columns even with lineup on).
+    "dev_l3": ("B_DEV_L3_", "P_DEV_L3_"),
+    "dev_l3_team": ("HOME_LINEUP_L3_", "AWAY_LINEUP_L3_", "DIFF_LINEUP_L3_",
+                    "HOME_SP_L3_", "AWAY_SP_L3_", "DIFF_SP_L3_"),
+    "dev_l5": ("HOME_LINEUP_L5_", "AWAY_LINEUP_L5_", "DIFF_LINEUP_L5_",
+               "HOME_SP_L5_", "AWAY_SP_L5_", "DIFF_SP_L5_",
+               "B_DEV_L5_", "P_DEV_L5_"),
+    "dev_l10": ("HOME_LINEUP_L10_", "AWAY_LINEUP_L10_", "DIFF_LINEUP_L10_",
+                "HOME_SP_L10_", "AWAY_SP_L10_", "DIFF_SP_L10_",
+                "B_DEV_L10_", "P_DEV_L10_"),
+    "dev_l20": ("HOME_LINEUP_L20_", "AWAY_LINEUP_L20_", "DIFF_LINEUP_L20_",
+                "HOME_SP_L20_", "AWAY_SP_L20_", "DIFF_SP_L20_",
+                "B_DEV_L20_", "P_DEV_L20_"),
 }
 
 # Feature families for the drop-one ablation profiles (E8a). Profile

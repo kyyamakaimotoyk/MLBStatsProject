@@ -93,10 +93,12 @@ def load_predictions(model_type: str, version: str) -> pd.DataFrame:
 
 
 def compare(model_a: str, model_b: str, version_a: str, version_b: str,
-            months: tuple[int, ...] = ()) -> None:
+            months: tuple[int, ...] = (), seasons: tuple[int, ...] = ()) -> None:
     """months, when given, restricts the comparison to games in those calendar
     months (e.g. 3,4,5,6 = the March-June slice where the market gap lives).
-    Diagnostic only — the pooled comparison stays the shipping bar."""
+    Diagnostic only — the pooled comparison stays the shipping bar.
+    seasons restricts to those years — the E8d selection window (2023,2024,
+    2025) selects among arms while 2026 stays confirm-only."""
     a = load_predictions(model_a, version_a)
     b = load_predictions(model_b, version_b)
     merged = a.merge(b, on=["game_pk", "game_date", "actual_margin", "actual_total"],
@@ -104,9 +106,14 @@ def compare(model_a: str, model_b: str, version_a: str, version_b: str,
     if merged.empty:
         raise SystemExit("no overlapping predictions; run validation.walkforward first")
     slice_note = ""
+    if seasons:
+        merged = merged[pd.to_datetime(merged["game_date"]).dt.year.isin(seasons)]
+        slice_note += f", seasons={sorted(seasons)}"
+        if merged.empty:
+            raise SystemExit("no overlapping predictions in the requested seasons")
     if months:
         merged = merged[pd.to_datetime(merged["game_date"]).dt.month.isin(months)]
-        slice_note = f", months={sorted(months)}"
+        slice_note += f", months={sorted(months)}"
         if merged.empty:
             raise SystemExit("no overlapping predictions in the requested months")
     win = (merged["actual_margin"] > 0).to_numpy()
@@ -145,11 +152,14 @@ def main() -> None:
     ap.add_argument("--version-b", default=None, help="override snapshot for model B")
     ap.add_argument("--months", default="", help="comma list of calendar months to slice "
                     "(diagnostic; e.g. 3,4,5,6 for the early-season window)")
+    ap.add_argument("--seasons", default="", help="comma list of years to slice "
+                    "(e.g. 2023,2024,2025 = the E8d selection window)")
     args = ap.parse_args()
     version = args.version or features_io.current_version("team")
     months = tuple(int(m) for m in args.months.split(",") if m)
+    seasons = tuple(int(s) for s in args.seasons.split(",") if s)
     compare(args.a, args.b, args.version_a or version, args.version_b or version,
-            months=months)
+            months=months, seasons=seasons)
 
 
 if __name__ == "__main__":

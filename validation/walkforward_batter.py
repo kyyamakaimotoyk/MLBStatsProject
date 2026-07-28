@@ -9,10 +9,20 @@ before S, then evaluate
      batter-marginal baseline aggregated identically) and calibration/Brier
      for the probability heads.
 
-Game predictions land in batter_predictions (model_version pa_v1); every
-window logs to model_registry.
+Game predictions land in batter_predictions (model_version pa_v1) and the
+B7 starter heads in pitcher_predictions; every window logs to model_registry.
+
+Experiment arms (E16 pattern): --enable-flags forces FEATURE_FLAGS on for
+this run; --compare-base additionally trains a flags-OFF model per season on
+identical folds and prints paired verdicts twice — the E8d selection pool
+(seasons <= 2025) and 2026 confirm-only — so one invocation serves both
+discipline windows. (This generalizes and replaces the old --b4-compare,
+which had become a no-op once the arsenal_cross flag stripped B4 columns
+from the default feature list.)
 
 Usage: python -m validation.walkforward_batter
+       python -m validation.walkforward_batter --seasons 2023 2024 2025 2026 \
+           --enable-flags dev_l5 --compare-base --version e16_l5
 """
 
 import argparse
@@ -102,9 +112,6 @@ def _load_game_side_data():
 # Matchup assembly lives in modeling.batter_model.assemble_matchup — shared
 # with the daily pipeline so the two paths can never drift.
 
-
-B4_COLS = ("B_XWOBA_F", "B_XWOBA_B", "B_XWOBA_O", "B_ARSENAL_MATCH")
-
 # ---- B8a (2026-07 cycle): slot-conditional expected RBI --------------------
 # The rbar machinery lives in modeling.batter_model (shared with the daily
 # pipeline so the two paths can never drift); the harness keeps only the
@@ -150,10 +157,16 @@ def _batter_rbi_lookup(events: pd.DataFrame):
 
 
 def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
-        b4_compare: bool = False, seasons: tuple[int, ...] = TEST_SEASONS) -> None:
+        seasons: tuple[int, ...] = TEST_SEASONS,
+        enable_flags: tuple[str, ...] = (), compare_base: bool = False) -> None:
     comp = bf.build()
     pa = comp["pa"]
-    feats = select_features(list(pa.columns), "batter_pa")
+    feats = select_features(list(pa.columns), "batter_pa", enable_flags=enable_flags)
+    feats_cmp = select_features(list(pa.columns), "batter_pa")
+    if compare_base and not enable_flags:
+        log.warning("--compare-base without --enable-flags compares identical "
+                    "models; skipping the compare arm")
+        compare_base = False
     park = comp["park"]
     sides, actual_sp = _load_game_side_data()
 
@@ -176,17 +189,20 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                                ("base_h", "base_k", "b1_h", "b1_k", "b2_k",
                                 "hit1", "hr1", "p_hit", "p_hr",
                                 "p_hit_cal", "p_hr_cal",
-                                "b4_ll", "nob4_ll", "nob4_h", "nob4_k",
                                 # B7: per-starter absolute errors
                                 "spk_m", "spk_base", "spk_board", "spk_wsp",
                                 "spbb_m", "spbb_base", "spbb_wsp",
                                 "sph_m", "sph_base", "sph_wsp",
                                 # B8a: expected-RBI absolute errors
                                 "rbi_m", "rbi_base", "rbi_slot")}
+    # --compare-base: season-keyed paired pools so the verdicts can split the
+    # E8d selection window (<=2025) from the 2026 confirm-only view
+    cmp_pool: dict[str, dict[int, list]] = {k: {} for k in
+        ("ll_on", "ll_off", "h_on", "h_off", "k_on", "k_off",
+         "p_hit_on", "p_hit_off", "hit1", "spk_on", "spk_off")}
     rbi_events = _load_rbi_events()
     rbi_lookup = _batter_rbi_lookup(rbi_events)
     calib_hist = {"p_hit": [], "p_hr": [], "hit1": [], "hr1": []}
-    feats_nob4 = [c for c in feats if c not in B4_COLS]
 
     for season in seasons:
         train = pa[pa["season"] < season]
@@ -195,6 +211,9 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
 
         model = bm.BatterPAModel(seed=seed)
         model.fit(train, feats)
+        if compare_base:
+            model_cmp = bm.BatterPAModel(seed=seed)
+            model_cmp.fit(train, feats_cmp)
 
         # --- per-PA log loss vs baselines
         probs = model.predict_proba(test, feats)
@@ -206,6 +225,13 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         ll_marginal = log_loss(y, bm.marginal_probs(test), labels=range(len(CLASSES)))
         log.info("per-PA log loss: model %.5f | batter-marginal %.5f | league %.5f",
                  ll_model, ll_marginal, ll_league)
+        if compare_base:
+            probs_cmp = model_cmp.predict_proba(test, feats_cmp)
+            idx = np.arange(len(test))
+            cmp_pool["ll_on"].setdefault(season, []).append(
+                -np.log(np.clip(probs[idx, y], 1e-12, None)))
+            cmp_pool["ll_off"].setdefault(season, []).append(
+                -np.log(np.clip(probs_cmp[idx, y], 1e-12, None)))
 
         # --- game-level evaluation (probable started, regular season)
         w = np.mean([(g, p) in starter_keys
@@ -238,6 +264,10 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                             eligible["is_home"].to_numpy())
         agg = bm.aggregate_game(p_mix, pa_dist)
         agg_base = bm.aggregate_game(p_base, pa_dist)
+        if compare_base:
+            p_sp_cmp = model_cmp.predict_proba(vs_sp, feats_cmp)
+            p_lg_cmp = model_cmp.predict_proba(vs_lg, feats_cmp)
+            agg_cmp = bm.aggregate_game(w * p_sp_cmp + (1 - w) * p_lg_cmp, pa_dist)
 
         # ---- B1: per-SP workload share instead of the league constant
         p_sp = model.predict_proba(vs_sp, feats)
@@ -257,9 +287,11 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         i_k7 = CLASSES.index("K")
         i_bb7 = CLASSES.index("BB")
         hit_idx = [CLASSES.index(c) for c in ("1B", "2B", "3B", "HR")]
-        sp_rows = pd.DataFrame({
+        sp_data = {
             "game_pk": eligible["game_pk"].to_numpy(),
             "sp_id": eligible["sp_id"].to_numpy(),
+            "game_date": eligible["game_date"].to_numpy(),
+            "w_sp_val": w_sp,
             "m_k": agg["exp_pa"] * p_sp[:, i_k7],
             "m_bb": agg["exp_pa"] * p_sp[:, i_bb7],
             "m_h": agg["exp_pa"] * p_sp[:, hit_idx].sum(axis=1),
@@ -271,17 +303,26 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
             "wsp_k": w_sp * agg["exp_pa"] * p_sp[:, i_k7],
             "wsp_bb": w_sp * agg["exp_pa"] * p_sp[:, i_bb7],
             "wsp_h": w_sp * agg["exp_pa"] * p_sp[:, hit_idx].sum(axis=1),
-        })
-        sp_g = sp_rows.groupby(["game_pk", "sp_id"], as_index=False).agg(
-            n=("m_k", "size"), m_k=("m_k", "sum"), m_bb=("m_bb", "sum"),
+        }
+        if compare_base:
+            sp_data["cmp_k"] = agg["exp_pa"] * p_sp_cmp[:, i_k7]
+        sp_rows = pd.DataFrame(sp_data)
+        agg_spec = dict(
+            n=("m_k", "size"), game_date=("game_date", "first"),
+            w_sp_val=("w_sp_val", "first"),
+            m_k=("m_k", "sum"), m_bb=("m_bb", "sum"),
             m_h=("m_h", "sum"), b_k=("b_k", "sum"), b_bb=("b_bb", "sum"),
             b_h=("b_h", "sum"), board_k=("board_k", "sum"), wsp_k=("wsp_k", "sum"),
             wsp_bb=("wsp_bb", "sum"), wsp_h=("wsp_h", "sum"))
+        if compare_base:
+            agg_spec["cmp_k"] = ("cmp_k", "sum")
+        sp_g = sp_rows.groupby(["game_pk", "sp_id"], as_index=False).agg(**agg_spec)
         sp_g = sp_g[sp_g["n"] == 9].merge(actual_sp, on=["game_pk", "sp_id"],
                                           how="inner")
         # the SP faces ~w of each batter's PAs (league constant, as in the
         # game mixture); wsp_k already carries its per-SP share
-        for col in ("m_k", "m_bb", "m_h", "b_k", "b_bb", "b_h", "board_k"):
+        for col in ("m_k", "m_bb", "m_h", "b_k", "b_bb", "b_h", "board_k") + \
+                (("cmp_k",) if compare_base else ()):
             sp_g[col] = w * sp_g[col]
         pooled["spk_m"].append(np.abs(sp_g["sp_k"] - sp_g["m_k"]).to_numpy())
         pooled["spk_base"].append(np.abs(sp_g["sp_k"] - sp_g["b_k"]).to_numpy())
@@ -293,6 +334,11 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         pooled["sph_m"].append(np.abs(sp_g["sp_h"] - sp_g["m_h"]).to_numpy())
         pooled["sph_base"].append(np.abs(sp_g["sp_h"] - sp_g["b_h"]).to_numpy())
         pooled["sph_wsp"].append(np.abs(sp_g["sp_h"] - sp_g["wsp_h"]).to_numpy())
+        if compare_base:
+            cmp_pool["spk_on"].setdefault(season, []).append(
+                np.abs(sp_g["sp_k"] - sp_g["m_k"]).to_numpy())
+            cmp_pool["spk_off"].setdefault(season, []).append(
+                np.abs(sp_g["sp_k"] - sp_g["cmp_k"]).to_numpy())
 
         # ---- B2: blend the K probability halfway back to the batter marginal
         i_k = CLASSES.index("K")
@@ -352,19 +398,16 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         calib_hist["hit1"].append(hit1)
         calib_hist["hr1"].append(hr1)
 
-        # ---- B4: paired comparison against a model WITHOUT the arsenal cols
-        if b4_compare:
-            model_nob4 = bm.BatterPAModel(seed=seed)
-            model_nob4.fit(train, feats_nob4)
-            y_idx = np.arange(len(test))
-            probs_nob4 = model_nob4.predict_proba(test, feats_nob4)
-            pooled["b4_ll"].append(-np.log(np.clip(probs[y_idx, y], 1e-12, None)))
-            pooled["nob4_ll"].append(-np.log(np.clip(probs_nob4[y_idx, y], 1e-12, None)))
-            p_mix_n = (w * model_nob4.predict_proba(vs_sp, feats_nob4)
-                       + (1 - w) * model_nob4.predict_proba(vs_lg, feats_nob4))
-            agg_n = bm.aggregate_game(p_mix_n, pa_dist)
-            pooled["nob4_h"].append(np.abs(actual_h - agg_n["exp_h"]))
-            pooled["nob4_k"].append(np.abs(actual_k - agg_n["exp_k"]))
+        # ---- compare-base: paired flags-ON vs flags-OFF pools, season-keyed
+        if compare_base:
+            for key, arr in (("h_on", np.abs(actual_h - agg["exp_h"])),
+                             ("h_off", np.abs(actual_h - agg_cmp["exp_h"])),
+                             ("k_on", np.abs(actual_k - agg["exp_k"])),
+                             ("k_off", np.abs(actual_k - agg_cmp["exp_k"])),
+                             ("p_hit_on", agg["p_hit"]),
+                             ("p_hit_off", agg_cmp["p_hit"]),
+                             ("hit1", hit1)):
+                cmp_pool[key].setdefault(season, []).append(np.asarray(arr))
 
         metrics = {"n_pa_test": int(len(test)), "n_batter_games": int(len(eligible)),
                    "ll_model": ll_model, "ll_marginal": ll_marginal, "ll_league": ll_league,
@@ -410,7 +453,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
             train_window=(str(train["game_date"].min().date()),
                           str(train["game_date"].max().date())),
             test_window=(f"{season}-01-01", f"{season}-12-31"),
-            notes=f"seed={seed}",
+            notes=f"seed={seed}, flags={list(enable_flags)}",
         )
 
         if write_preds:
@@ -446,6 +489,35 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                 for i in range(0, len(records), 2000):
                     conn.execute(insert, records[i : i + 2000])
             log.info("wrote %d batter predictions for %d", len(records), season)
+
+            # B7 starter heads -> pitcher_predictions (per-SP workload w, the
+            # daily_v1 semantics), so star-pitcher slices are queryable per arm
+            sp_out = sp_g[["game_pk", "sp_id"]].copy()
+            sp_out["model_version"] = version
+            sp_out["data_through_date"] = (pd.to_datetime(sp_g["game_date"])
+                                           - pd.Timedelta(days=1)).dt.date.astype(str)
+            sp_out["w_sp"] = sp_g["w_sp_val"].astype(float)
+            sp_out["n_batters"] = 9
+            sp_out["exp_k"] = sp_g["wsp_k"].astype(float)
+            sp_out["exp_bb"] = sp_g["wsp_bb"].astype(float)
+            sp_out["exp_h"] = sp_g["wsp_h"].astype(float)
+            insert_sp = text("""
+                INSERT INTO pitcher_predictions
+                    (game_pk, sp_id, model_version, data_through_date,
+                     w_sp, n_batters, exp_k, exp_bb, exp_h)
+                VALUES (:game_pk, :sp_id, :model_version, :data_through_date,
+                        :w_sp, :n_batters, :exp_k, :exp_bb, :exp_h)
+                ON CONFLICT (game_pk, sp_id, model_version) DO UPDATE SET
+                    data_through_date = EXCLUDED.data_through_date,
+                    w_sp = EXCLUDED.w_sp, n_batters = EXCLUDED.n_batters,
+                    exp_k = EXCLUDED.exp_k, exp_bb = EXCLUDED.exp_bb,
+                    exp_h = EXCLUDED.exp_h, created_at = now()
+            """)
+            sp_records = sp_out.to_dict("records")
+            with get_engine().begin() as conn:
+                for i in range(0, len(sp_records), 2000):
+                    conn.execute(insert_sp, sp_records[i : i + 2000])
+            log.info("wrote %d starter predictions for %d", len(sp_records), season)
 
     # ---- pooled paired verdicts (B1/B2/B3), all seasons together
     P = {k: np.concatenate(v) for k, v in pooled.items() if v}
@@ -488,16 +560,40 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
             t = ttest_rel(a, b)
             print(f"  {label}: {a.mean():.4f} vs {b.mean():.4f} "
                   f"| paired-t p={t.pvalue:.4f}")
-    if pooled["b4_ll"] and pooled["b4_ll"][0] is not None and len(pooled["b4_ll"]):
-        ll_a, ll_b = np.concatenate(pooled["b4_ll"]), np.concatenate(pooled["nob4_ll"])
-        t = ttest_rel(ll_a, ll_b)
-        print(f"  B4 arsenal cross, per-PA log loss: {ll_a.mean():.5f} (with) vs "
-              f"{ll_b.mean():.5f} (without) | paired-t p={t.pvalue:.4f}")
-        for label, a_key, b_key in (("B4 hits MAE", "base_h", "nob4_h"),
-                                    ("B4 K MAE", "base_k", "nob4_k")):
-            t = ttest_rel(P[a_key], P[b_key])
-            print(f"  {label}: {P[a_key].mean():.4f} (with) vs {P[b_key].mean():.4f} "
-                  f"(without) | paired-t p={t.pvalue:.4f}")
+    # ---- compare-base verdicts: flags-ON vs flags-OFF, selection pool split
+    # from the 2026 confirm-only view (E8d hygiene — never select on 2026)
+    if compare_base and cmp_pool["ll_on"]:
+        flags_note = "+".join(enable_flags)
+        for title, keep in (("selection pool (<=2025)", lambda s: s <= 2025),
+                            ("2026 confirm-only", lambda s: s == 2026)):
+            seas = sorted(s for s in cmp_pool["ll_on"] if keep(s))
+            if not seas:
+                continue
+
+            def _cat(key):
+                arrs = [a for s in seas for a in cmp_pool[key].get(s, [])]
+                return np.concatenate(arrs) if arrs else np.array([])
+
+            C = {k: _cat(k) for k in cmp_pool}
+            print(f"\n=== [{flags_note}] flags-ON vs flags-OFF -- {title} "
+                  f"({len(C['ll_on'])} PAs, {len(C['h_on'])} batter-games) ===")
+            t = ttest_rel(C["ll_on"], C["ll_off"])
+            print(f"  per-PA log loss: {C['ll_on'].mean():.5f} vs "
+                  f"{C['ll_off'].mean():.5f} | paired-t p={t.pvalue:.4f}")
+            for label, ka, kb in (("hits MAE", "h_on", "h_off"),
+                                  ("K MAE", "k_on", "k_off")):
+                t = ttest_rel(C[ka], C[kb])
+                print(f"  {label}: {C[ka].mean():.4f} vs {C[kb].mean():.4f} "
+                      f"| paired-t p={t.pvalue:.4f}")
+            t = ttest_rel((C["p_hit_on"] - C["hit1"]) ** 2,
+                          (C["p_hit_off"] - C["hit1"]) ** 2)
+            print(f"  Brier p_hit: {np.mean((C['p_hit_on'] - C['hit1']) ** 2):.5f} vs "
+                  f"{np.mean((C['p_hit_off'] - C['hit1']) ** 2):.5f} "
+                  f"| paired-t p={t.pvalue:.4f}")
+            if len(C["spk_on"]):
+                t = ttest_rel(C["spk_on"], C["spk_off"])
+                print(f"  starter K MAE: {C['spk_on'].mean():.4f} vs "
+                      f"{C['spk_off'].mean():.4f} | paired-t p={t.pvalue:.4f}")
 
 
 def main() -> None:
@@ -506,14 +602,20 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-preds", action="store_true")
     ap.add_argument("--version", default=MODEL_VERSION, help="model_version for stored preds")
-    ap.add_argument("--b4-compare", action="store_true",
-                    help="also train a no-arsenal model per season for paired B4 tests")
     ap.add_argument("--seasons", type=int, nargs="+", default=list(TEST_SEASONS),
                     help="test seasons, each trained on all seasons before it "
                          "(e.g. --seasons 2026 backfills the current season)")
+    ap.add_argument("--enable-flags", default="",
+                    help="comma list of FEATURE_FLAGS to force ON for this run "
+                         "(experiment arms, e.g. dev_l5)")
+    ap.add_argument("--compare-base", action="store_true",
+                    help="also train a flags-OFF model per season for paired "
+                         "ON-vs-OFF verdicts (selection <=2025 and 2026 split)")
     args = ap.parse_args()
     run(seed=args.seed, write_preds=not args.no_preds, version=args.version,
-        b4_compare=args.b4_compare, seasons=tuple(args.seasons))
+        seasons=tuple(args.seasons),
+        enable_flags=tuple(f for f in args.enable_flags.split(",") if f),
+        compare_base=args.compare_base)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,16 @@ resource "aws_iam_role_policy" "scheduler" {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
         Resource = [aws_iam_role.task_execution.arn, aws_iam_role.pipeline_task.arn]
+      },
+      # propagate_tags makes RunTask tag the launched task, which needs
+      # TagResource on tasks in our cluster (and only at task creation).
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:TagResource"]
+        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.main.name}/*"
+        Condition = {
+          StringEquals = { "ecs:CreateAction" = "RunTask" }
+        }
       }
     ]
   })
@@ -61,6 +71,9 @@ resource "aws_scheduler_schedule" "lineup_refresh" {
     ecs_parameters {
       task_definition_arn = aws_ecs_task_definition.pipeline.arn
       launch_type         = "FARGATE"
+      # Fargate is billed per task; without this the pipeline's compute shows
+      # as untagged spend in Cost Explorer.
+      propagate_tags = "TASK_DEFINITION"
       network_configuration {
         subnets          = aws_subnet.public[*].id
         security_groups  = [aws_security_group.pipeline_task.id]
@@ -102,6 +115,9 @@ resource "aws_scheduler_schedule" "score_refresh" {
     ecs_parameters {
       task_definition_arn = aws_ecs_task_definition.pipeline.arn
       launch_type         = "FARGATE"
+      # Fargate is billed per task; without this the pipeline's compute shows
+      # as untagged spend in Cost Explorer.
+      propagate_tags = "TASK_DEFINITION"
       network_configuration {
         subnets          = aws_subnet.public[*].id
         security_groups  = [aws_security_group.pipeline_task.id]
@@ -131,6 +147,9 @@ resource "aws_scheduler_schedule" "daily_pipeline" {
     ecs_parameters {
       task_definition_arn = aws_ecs_task_definition.pipeline.arn
       launch_type         = "FARGATE"
+      # Fargate is billed per task; without this the pipeline's compute shows
+      # as untagged spend in Cost Explorer.
+      propagate_tags = "TASK_DEFINITION"
       network_configuration {
         subnets          = aws_subnet.public[*].id
         security_groups  = [aws_security_group.pipeline_task.id]

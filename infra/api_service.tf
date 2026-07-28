@@ -152,6 +152,11 @@ resource "aws_ecs_service" "api" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # Fargate usage is billed per task, so cost allocation needs the Project tag
+  # on the tasks themselves — the service/task-definition tags don't count.
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   network_configuration {
     subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.api_task.id]

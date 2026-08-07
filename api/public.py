@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from api.cache import cached
 from core.db import get_engine
+from core.market import with_market as _with_market
 
 router = APIRouter()
 
@@ -34,42 +35,6 @@ ET_TODAY = "(now() AT TIME ZONE 'America/New_York')::date"
 
 def _clean(df: pd.DataFrame) -> list[dict]:
     return df.astype(object).where(df.notna(), None).to_dict("records")
-
-
-def _no_vig(ml_home, ml_away):
-    def implied(a):
-        a = a.astype(float)
-        return np.where(a < 0, -a / (-a + 100.0), 100.0 / (a + 100.0))
-    ph, pa = implied(ml_home), implied(ml_away)
-    return ph / (ph + pa)
-
-
-def _with_market(df: pd.DataFrame) -> pd.DataFrame:
-    """Turn raw closing/opening captures into the market's pregame view:
-    a no-vig home win probability and a total line.
-
-    Corruption guard (same as scripts/benchmark_odds.py): pregame MLB win
-    probabilities live in roughly [0.20, 0.85]. An implausible closing
-    capture (in-game contamination) falls back to the opening line; games
-    with neither plausible ship no market fields.
-    """
-    def no_vig_col(home_col: str, away_col: str) -> pd.Series:
-        ok = df[home_col].notna() & df[away_col].notna()
-        out = pd.Series(np.nan, index=df.index)
-        if ok.any():
-            out[ok] = _no_vig(df.loc[ok, home_col], df.loc[ok, away_col])
-        return out
-
-    p_close = no_vig_col("close_ml_home", "close_ml_away")
-    p_open = no_vig_col("open_ml_home", "open_ml_away")
-    close_ok = p_close.between(0.20, 0.85)
-    open_ok = p_open.between(0.20, 0.85)
-    df["market_p_home"] = np.where(close_ok, p_close,
-                                   np.where(open_ok, p_open, np.nan))
-    df["market_total"] = np.where(close_ok, df["close_total"],
-                                  np.where(open_ok, df["open_total"], np.nan))
-    return df.drop(columns=["close_ml_home", "close_ml_away", "close_total",
-                            "open_ml_home", "open_ml_away", "open_total"])
 
 
 def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
@@ -122,51 +87,48 @@ def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
 @router.get("/api/public/summary")
 @cached(ttl=RECORD_TTL)
 def summary():
-    """Headline cards: the visible track record."""
+    """Headline cards: the visible track record.
+
+    Reads pred_grades / batter_grades_daily, where the pipeline has already
+    resolved which of the ~81 append-only prediction rows per game is the
+    published one. This used to pull 162k rows into pandas to produce these
+    nine numbers. The `last30` window is anchored to the newest GRADED date,
+    not to today — an off-day must not silently shrink the window.
+    """
     engine = get_engine()
     rec = pd.read_sql(text("""
-        SELECT g.game_date,
-               -- graded on the published pick (p_home vs .5, same as the feed
-               -- and the record page) — not the margin sign, which can differ
-               -- on pre-clip calibrated rows
-               (CASE WHEN p.p_home >= 0.5 THEN g.home_score > g.away_score
-                     ELSE g.home_score < g.away_score END) AS correct,
-               abs(g.home_score - g.away_score - p.pred_margin) AS margin_err,
-               abs(g.home_score + g.away_score - p.pred_total) AS total_err
-        FROM games g
-        JOIN LATERAL (
-            SELECT * FROM model_predictions p
-            WHERE p.game_pk = g.game_pk AND p.model_type = :m
-            ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
-            LIMIT 1
-        ) p ON TRUE
-        WHERE g.is_final
-    """), engine, params={"m": PRIMARY})
-    batter = pd.read_sql(text("""
-        SELECT (bp.p_hit >= 0.5) = (bg.h >= 1) AS hit_correct
-        FROM batter_game_lines bg
-        JOIN games g ON g.game_pk = bg.game_pk
-        JOIN LATERAL (
-            SELECT * FROM batter_predictions bp
-            WHERE bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
-            ORDER BY (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
-            LIMIT 1
-        ) bp ON TRUE
-        WHERE g.is_final
+        SELECT count(*)                                    AS games_graded,
+               avg(correct::int)::double precision         AS winners_pct,
+               avg(margin_err::double precision)           AS avg_score_error,
+               avg(total_err::double precision)            AS avg_total_error,
+               min(game_date)::text                        AS since,
+               count(*) FILTER (
+                   WHERE correct AND game_date >= (SELECT max(game_date)
+                                                   FROM pred_grades) - 30) AS last30_wins,
+               count(*) FILTER (
+                   WHERE NOT correct AND game_date >= (SELECT max(game_date)
+                                                       FROM pred_grades) - 30) AS last30_losses
+        FROM pred_grades
     """), engine)
-    if rec.empty:
+    if rec.empty or not rec["games_graded"].iloc[0]:
         raise HTTPException(404, "no graded predictions yet")
-    last30 = rec[rec["game_date"] >= rec["game_date"].max() - pd.Timedelta(days=30)]
+    r = rec.iloc[0]
+    batter = pd.read_sql(text("""
+        SELECT coalesce(sum(n), 0)             AS calls,
+               coalesce(sum(model_correct), 0) AS correct
+        FROM batter_grades_daily
+    """), engine).iloc[0]
+    calls = int(batter["calls"])
     return {
-        "games_graded": int(len(rec)),
-        "winners_pct": float(rec["correct"].mean()),
-        "last30_wins": int(last30["correct"].sum()),
-        "last30_losses": int((~last30["correct"]).sum()),
-        "avg_score_error": float(rec["margin_err"].mean()),
-        "avg_total_error": float(rec["total_err"].mean()),
-        "batter_calls_graded": int(len(batter)),
-        "batter_hit_call_pct": float(batter["hit_correct"].mean()) if len(batter) else None,
-        "since": str(rec["game_date"].min())[:10],
+        "games_graded": int(r["games_graded"]),
+        "winners_pct": float(r["winners_pct"]),
+        "last30_wins": int(r["last30_wins"]),
+        "last30_losses": int(r["last30_losses"]),
+        "avg_score_error": float(r["avg_score_error"]),
+        "avg_total_error": float(r["avg_total_error"]),
+        "batter_calls_graded": calls,
+        "batter_hit_call_pct": (float(batter["correct"]) / calls) if calls else None,
+        "since": str(r["since"])[:10],
     }
 
 
@@ -411,40 +373,15 @@ def results(days: int = Query(120, le=2000)):
     the span they are about to render (`daysBack(win)` on the site). The old
     1400-day default shipped ~1.7 MB to draw a 30-day chart."""
     df = pd.read_sql(text(f"""
-        SELECT g.game_date::text AS game_date, p.p_home, p.pred_margin,
-               p.pred_total,
-               g.home_score - g.away_score AS margin,
-               g.home_score + g.away_score AS total,
-               (g.home_score > g.away_score) AS home_won,
-               c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
-               c.total AS close_total,
-               op.ml_home AS open_ml_home, op.ml_away AS open_ml_away,
-               op.total AS open_total
-        FROM games g
-        JOIN LATERAL (
-            SELECT * FROM model_predictions p
-            WHERE p.game_pk = g.game_pk AND p.model_type = :m
-            ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
-            LIMIT 1
-        ) p ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT * FROM odds_lines o
-            WHERE o.game_pk = g.game_pk AND o.is_closing
-              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
-            ORDER BY o.captured_at DESC LIMIT 1
-        ) c ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT * FROM odds_lines o
-            WHERE o.game_pk = g.game_pk AND NOT o.is_closing
-              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
-            ORDER BY o.captured_at DESC LIMIT 1
-        ) op ON TRUE
-        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
-        ORDER BY g.game_date
-    """), get_engine(), params={"m": PRIMARY, "days": days})
+        SELECT game_date::text AS game_date, p_home, pred_margin, pred_total,
+               margin, total, home_won, market_p_home, market_total
+        FROM pred_grades
+        WHERE game_date >= {ET_TODAY} - :days
+        ORDER BY game_date, game_pk
+    """), get_engine(), params={"days": days})
     if df.empty:
         return []
-    return _clean(_with_market(df))
+    return _clean(df)
 
 
 @router.get("/api/public/batter-results")
@@ -460,35 +397,16 @@ def batter_results(days: int = Query(120, le=2000)):
     them homered, and the day's base rate (homers by ALL graded starters) —
     the honest benchmark for a ranking claim is chance, not zero.
 
-    `days` bounds the scan at the innermost join, where it can use
-    idx_games_date. It does not change the numbers for the days it keeps:
-    hr_rank is ranked within a game_date, so narrowing the window drops whole
-    days rather than reshuffling the ones that remain.
+    The per-day ranking is resolved in the pipeline (orchestration/grades.py):
+    this endpoint used to run a DISTINCT ON over the whole 387k-row batter
+    join plus a window function on every request, to produce ~700 rows.
     """
     df = pd.read_sql(text(f"""
-        SELECT y.game_date, count(*) AS n,
-               count(*) FILTER (WHERE (y.p_hit >= 0.5) = (y.h >= 1)) AS model_correct,
-               count(*) FILTER (WHERE y.h >= 1) AS always_yes_correct,
-               count(*) FILTER (WHERE y.hr >= 1) AS hr_base_hits,
-               count(*) FILTER (WHERE y.hr_rank <= 5) AS hr_watch_n,
-               count(*) FILTER (WHERE y.hr_rank <= 5 AND y.hr >= 1) AS hr_watch_hits
-        FROM (
-            SELECT x.*, ROW_NUMBER() OVER (PARTITION BY x.game_date
-                                           ORDER BY x.p_hr DESC NULLS LAST) AS hr_rank
-            FROM (
-                SELECT DISTINCT ON (bp.game_pk, bp.player_id)
-                       g.game_date::text AS game_date, bp.p_hit, bp.p_hr, bg.h, bg.hr
-                FROM batter_game_lines bg
-                JOIN games g ON g.game_pk = bg.game_pk AND g.is_final
-                JOIN batter_predictions bp
-                  ON bp.game_pk = bg.game_pk AND bp.player_id = bg.player_id
-                WHERE bg.h IS NOT NULL AND bp.p_hit IS NOT NULL
-                  AND g.game_date >= {ET_TODAY} - :days
-                ORDER BY bp.game_pk, bp.player_id,
-                         (bp.model_version = 'daily_v1') DESC, bp.created_at DESC
-            ) x
-        ) y
-        GROUP BY 1 ORDER BY 1
+        SELECT game_date::text AS game_date, n, model_correct,
+               always_yes_correct, hr_base_hits, hr_watch_n, hr_watch_hits
+        FROM batter_grades_daily
+        WHERE game_date >= {ET_TODAY} - :days
+        ORDER BY game_date
     """), get_engine(), params={"days": days})
     return _clean(df)
 

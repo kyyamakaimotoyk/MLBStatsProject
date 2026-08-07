@@ -41,6 +41,7 @@ from features import park_factors, team_features, team_rating
 from ingestion import backfill_games, backfill_statcast, statsapi_client
 from modeling import batter_model as bm
 from modeling.team_models import EloBaseline, make
+from orchestration import grades
 
 log = logging.getLogger("daily")
 
@@ -639,6 +640,10 @@ def main() -> None:
 
     if args.scores_only:
         refresh_scores(target)
+        # Finals landing is exactly what turns a prediction into a grade, so
+        # the rollups have to move on this tick too — otherwise the site's
+        # record would lag the scores it is showing beside it.
+        grades.refresh()
         return
 
     if not args.skip_ingest:
@@ -674,6 +679,8 @@ def main() -> None:
     team_preds = predict_team(slate, target, asof, lineups=game_lineups,
                               weather=weather)
     batter_preds = predict_batters(slate, target, asof, lineups=game_lineups)
+    # Serving rollups last: they read the predictions this run just wrote.
+    grades.refresh()
     summarize(slate, team_preds, batter_preds)
     warnings = team_preds.attrs.get("warnings", []) + batter_preds.attrs.get("warnings", [])
     print(f"\n{'!!! ' + str(len(warnings)) + ' TRIPWIRE WARNINGS' if warnings else 'all sanity checks passed'}")

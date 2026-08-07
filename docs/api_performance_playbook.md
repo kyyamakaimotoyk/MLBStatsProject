@@ -648,15 +648,66 @@ The same change on the *site* distribution (static HTML/JS, `PriceClass_100` →
 `_200`) took its TTFB from 0.83 s to 0.072 s on edge hits — worth checking
 before assuming the API was the slow part.
 
+### Third pass: the rollup tables (item 1 — the actual fix)
+
+`migrations/0015_grade_rollups.sql` adds `pred_grades` (one row per graded
+game) and `batter_grades_daily` (one row per day).
+`orchestration/grades.py` resolves the append-only prediction rows **once, on
+write**, in the pipeline that already runs whenever the inputs change; the API
+does an indexed range scan.
+
+Server-side query time, measured with `EXPLAIN ANALYZE` on the same instance:
+
+| Query | Before | After |
+|---|---|---|
+| summary — batter half | 5,707 ms | **0.1 ms** |
+| batter-results, full history | 10,029 ms | **1.9 ms** |
+| summary — games half | 102 ms | **2.8 ms** |
+| results, 60 days | 11 ms | **1.6 ms** |
+
+Four things worth stealing:
+
+**Snapshot the old outputs before you touch the read path.** Freeze every
+endpoint × window to JSON, then diff the rewrite against it. This is what
+caught both real bugs, neither of which would have shown up in a smoke test.
+
+**Bug 1 — storing a computed float in the source column's type.**
+`market_p_home` is the no-vig conversion of two moneylines, computed in
+float64. Stored as `REAL` (matching the moneyline columns it came from), it
+silently became `0.6219831` instead of `0.6219831346321605`. Copied columns
+may keep the source type; **computed** columns need the type of the
+computation. Fixed in `0016`.
+
+**Bug 2 — inheriting an unstable sort.** The old query was `ORDER BY
+game_date`, which never defined order *within* a date, so its row order was
+never reproducible. The rollup's scan produced a different tie order and the
+diff lit up. The fix is to add the real tiebreaker (`, game_pk`) and compare
+order-insensitively; verify no consumer depends on order first (the charts
+either sort explicitly or aggregate).
+
+**One accepted difference.** `avg_score_error` moved from 3.479316169348683 to
+3.4793161687572205 — 6e-10, because pandas averaged a float32 column while
+Postgres now averages in float64. The new value is the more accurate one and
+the site renders `.toFixed(1)`. Everything else is identical; don't claim
+"byte-identical" when it isn't.
+
+**Keep the derived tables honest.** `scripts/test_grade_rollups.py` recomputes
+the grading from base tables the long way and diffs it against the rollup, and
+checks that an incremental refresh reproduces a full rebuild — so the numbers
+can't depend on when the pipeline happened to run.
+
 ### What this does *not* fix
 
 Being explicit, so the next person doesn't over-trust it:
 
 - **The cache is process-local.** It dies on deploy (mitigated by warm-up) and
   would be per-task if the service ever scales out.
-- **The underlying queries are still O(history × versions).** A cold key still
-  pays 1.5–2s. Only rollup tables (item 1) fix that.
-- **Nothing was done about the redundancy ratio**, the actual root cause.
+- **The redundancy ratio itself is unchanged** — `model_predictions` still
+  holds ~81 rows per game. The rollups route around it for serving; they do
+  not shrink it, and every *other* consumer still pays the LATERAL.
+- **The rollups can go stale silently** if a backfill rewrites history outside
+  the incremental window. That is what `--full` and the drift test are for,
+  and nothing enforces running them.
 - **No cache invalidation hook.** The pipeline could invalidate the API
   distribution after each run; for now the TTLs are short enough that it
   doesn't matter. Note CloudFront gives 1,000 free invalidation paths/month and

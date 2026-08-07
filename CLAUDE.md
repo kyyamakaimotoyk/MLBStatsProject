@@ -128,7 +128,26 @@ cd web; npm run dev                              # local frontend on :3000
 .venv\Scripts\python visualization\site_traffic.py   # local-only traffic dashboard on :8050
 ```
 
-Public read endpoints are cached in-process (`api/cache.py`): a TTL plus
+The track record is served from **rollup tables**, not recomputed per request:
+`pred_grades` (one row per graded game) and `batter_grades_daily` (one row per
+day) resolve "which of the ~81 append-only prediction rows per game is the
+published one" once, on write. `orchestration/grades.py` refreshes them at the
+end of every daily run and on every `--scores-only` tick; the API only ever
+does an indexed range scan over them.
+
+```powershell
+.venv\Scripts\python -m orchestration.grades           # trailing 30 days
+.venv\Scripts\python -m orchestration.grades --full    # after a walk-forward backfill
+.venv\Scripts\python scripts\test_grade_rollups.py     # drift check vs base tables
+```
+
+A walk-forward backfill rewrites history rather than the recent window and can
+change which row wins for games with no `daily_v1` prediction — run `--full`
+after one, then the drift test. These tables are derived and disposable, and
+**no feature builder may read them**: they are postgame grading for display,
+so nothing in them is point-in-time safe.
+
+Public read endpoints are also cached in-process (`api/cache.py`): a TTL plus
 single-flight and stale-while-revalidate, primed at startup by the `lifespan`
 warm-up in `api/main.py`. TTLs come from the pipeline schedule, so anything
 that changes how often the pipeline writes should move `FEED_TTL`/`RECORD_TTL`

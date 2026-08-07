@@ -18,14 +18,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import text
 
 from core.db import get_engine
-
-
-def _no_vig(ml_home: pd.Series, ml_away: pd.Series) -> pd.Series:
-    def implied(a):
-        a = a.astype(float)
-        return np.where(a < 0, -a / (-a + 100.0), 100.0 / (a + 100.0))
-    ph, pa = implied(ml_home), implied(ml_away)
-    return ph / (ph + pa)
+from core.market import no_vig as _no_vig
 
 
 @asynccontextmanager

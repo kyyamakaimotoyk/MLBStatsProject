@@ -38,7 +38,7 @@ flowchart LR
 
     subgraph DATA["③ Storage — source of truth"]
         direction TB
-        RDS[("RDS Postgres 17 · db.t4g.micro<br/>games · plays · statcast_pitches<br/>*_predictions · odds_lines · ingest_ledger")]
+        RDS[("RDS Postgres 17 · db.t4g.micro<br/>games · plays · statcast_pitches<br/>*_predictions · odds_lines · ingest_ledger<br/>pred_grades · batter_grades_daily (serving rollups)")]
         S3RAW[("S3 mlb-stats-data<br/>raw/ archives · models/ bundles")]
         S3SITE[("S3 mlb-stats-site<br/>Next.js static export")]
         SEC["Secrets Manager<br/>RDS-managed password"]
@@ -150,6 +150,7 @@ sequenceDiagram
         end
         P->>P: build features in memory (the daily path<br/>does not write feature_snapshots)
         P->>DB: upsert model_predictions, batter_predictions,<br/>pitcher_predictions — model_version daily_v1
+        P->>DB: refresh pred_grades + batter_grades_daily<br/>(resolve the published row once, on write)
     end
 
     rect rgb(40, 55, 45)
@@ -165,6 +166,7 @@ sequenceDiagram
         P->>X: yesterday + today, finals
         Note right of P: Statcast deliberately not seeded —<br/>a partial day must never enter the ledger
         P->>DB: import finals → picks grade the same evening
+        P->>DB: refresh the grade rollups — a final landing<br/>is what turns a prediction into a grade
     end
 
     rect rgb(35, 50, 60)
@@ -182,7 +184,7 @@ sequenceDiagram
                 A-->>CF: serve stale now
                 A->>DB: background refresh
             else cold
-                A->>DB: single-flight, date-bounded SELECT
+                A->>DB: single-flight, date-bounded SELECT<br/>over the pre-resolved rollups
                 DB-->>A: bounded rows
             end
             A-->>CF: gzip + Cache-Control: max-age=60

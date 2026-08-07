@@ -4,9 +4,11 @@ WORKDIR /app
 COPY api/requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-# Deliberately model-free (the NBA api lesson): only core/db + the routers.
+# Deliberately model-free (the NBA api lesson): only core/db, the shared
+# odds->market conversion, and the routers. Nothing that imports a model.
 COPY core/__init__.py core/__init__.py
 COPY core/db.py core/db.py
+COPY core/market.py core/market.py
 COPY api api
 
 EXPOSE 8000

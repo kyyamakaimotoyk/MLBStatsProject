@@ -11,6 +11,7 @@ If it doesn't, Part 1's *reasoning* still applies — only the commands change.
 
 Contents:
 
+0. [Before and after, in pictures](#before-and-after-in-pictures)
 1. [Diagnosis: the logic, the commands, and a lab you can run](#part-1--diagnosis)
 2. [The full menu of fixes, tiered](#part-2--the-menu-of-fixes)
 3. [What was actually implemented, and what it bought](#part-3--implementation)
@@ -28,7 +29,160 @@ pulled 162,135 rows out of Postgres into pandas to return **257 bytes**, and
 took 30 seconds doing it. The fix was three cheap changes — an in-process
 cache with stale-while-revalidate, fetching only the window being rendered,
 and gzip — which took a cold worst-case page load to 2.3s and a normal one to
-0.13s of server time.
+0.13s of server time. A second pass put CloudFront in front of the API, which
+took the remaining cost — a 0.55s TLS handshake from Tokyo to us-east-1 — down
+to 0.03s.
+
+---
+
+## Before and after, in pictures
+
+### Architecture — before
+
+Every layer that could have absorbed a read was missing one. CloudFront existed
+but only in front of the static site; the API was Route 53 straight to an ALB,
+so every viewer terminated TLS in Virginia and every request reached Postgres.
+
+```mermaid
+flowchart LR
+    B["Browser — Tokyo<br/>Tonight / Record"]
+
+    subgraph EDGE["CloudFront · PriceClass_100 — no Asian edge"]
+        CFS["Site distribution<br/>moundmodel.com"]
+    end
+
+    subgraph AWS["AWS us-east-1"]
+        S3S[("S3<br/>static export")]
+        R53["Route 53<br/>api.moundmodel.com → ALB"]
+        ALB["ALB<br/>TLS terminates HERE"]
+        API["Fargate API · 0.25 vCPU / 512 MB<br/>1 uvicorn worker, sync handlers<br/>no cache · no gzip"]
+        RDS[("RDS Postgres 17<br/>db.t4g.micro — 3-10% CPU, idle")]
+    end
+
+    B -->|"HTML / JS<br/>served from a US or EU edge"| CFS
+    CFS --> S3S
+    B -->|"4 parallel XHR<br/>TLS 0.55 s"| R53
+    R53 --> ALB --> API
+    API -->|"full-history scans<br/>81 prediction rows per game<br/>162,135 rows to return 257 B"| RDS
+    API -.->|"uncompressed JSON · up to 1.66 MB<br/>no Cache-Control"| B
+
+    classDef hot fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef cool fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    class API,ALB hot
+    class RDS cool
+```
+
+### Architecture — after
+
+```mermaid
+flowchart LR
+    B["Browser — Tokyo"]
+
+    subgraph EDGE["CloudFront · PriceClass_200 — Tokyo/Osaka edges"]
+        CFS["Site distribution<br/>moundmodel.com"]
+        CFA["API distribution<br/>api.moundmodel.com<br/>TLS 0.03 s · cache key = querystring + Origin"]
+    end
+
+    subgraph AWS["AWS us-east-1"]
+        S3S[("S3<br/>static export")]
+        ALB["ALB<br/>via api-origin.moundmodel.com"]
+        API["Fargate API · 0.25 vCPU / 512 MB<br/>in-process TTL cache<br/>single-flight + stale-while-revalidate<br/>gzip level 5"]
+        RDS[("RDS Postgres 17")]
+    end
+
+    B -->|"HTML / JS"| CFS --> S3S
+    B -->|"4 parallel XHR"| CFA
+    CFA -.->|"cache MISS only"| ALB
+    ALB --> API
+    API -.->|"cache miss only<br/>date-bounded window"| RDS
+    CFA -->|"HIT: 0.034 s<br/>gzipped, from Tokyo"| B
+
+    classDef fast fill:#14532d,stroke:#22c55e,color:#fff
+    classDef cool fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    class CFA,API fast
+    class RDS cool
+```
+
+### Sequence — before
+
+The Record page fired four requests at once into a single uvicorn worker on a
+quarter of a CPU, so they queued behind each other as well as being slow
+individually.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (Tokyo)
+    participant R as Route 53
+    participant L as ALB (us-east-1)
+    participant A as Fargate API<br/>0.25 vCPU, 1 worker
+    participant D as RDS Postgres
+
+    B->>R: resolve api.moundmodel.com
+    R-->>B: ALB address
+    Note over B,L: TLS handshake to Virginia — 0.55 s
+
+    par all four dispatched together
+        B->>L: GET /summary
+    and
+        B->>L: GET /results (no ?days → 1400 days)
+    and
+        B->>L: GET /batter-results (no params at all)
+    and
+        B->>L: GET /feed?days=21
+    end
+    L->>A: forward — all four queue on one worker
+
+    A->>D: LATERAL per row, 81 versions/game, no date filter
+    D-->>A: 162,135 rows
+    A->>A: pandas aggregate → 257 bytes (20.7 s of SQL)
+    A->>D: results: 3 LATERALs/row over ~9,000 games
+    D-->>A: 1.66 MB of rows
+    A->>D: batter-results: DISTINCT ON over a 387k-row join
+    D-->>A: 683 daily rows (16 s)
+
+    A-->>B: uncompressed JSON, no Cache-Control
+    Note over B: first paint after ~30 s<br/>navigating away and back repeats all of it
+```
+
+### Sequence — after
+
+Three caches now sit in front of Postgres, and each one absorbs the request
+class the one behind it would have handled.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (Tokyo)
+    participant C as CloudFront<br/>Tokyo edge
+    participant L as ALB (us-east-1)
+    participant A as Fargate API<br/>in-process cache
+    participant D as RDS Postgres
+
+    Note over B,C: TLS handshake at the edge — 0.03 s
+
+    B->>C: GET /summary, /results?days=60,<br/>/batter-results?days=60, /feed?days=21
+    alt edge cache HIT (the common case)
+        C-->>B: gzipped JSON — 0.034 s
+    else edge cache MISS
+        C->>L: fetch via api-origin.moundmodel.com
+        L->>A: forward
+        alt in-process cache FRESH
+            A-->>L: 0.003 s
+        else STALE (past TTL, inside stale window)
+            A-->>L: serve stale immediately
+            A->>D: background refresh (one thread, non-blocking)
+        else COLD
+            A->>D: single-flight — one query even if<br/>4 requests race, date-bounded window
+            D-->>A: bounded rows
+        end
+        A-->>L: gzip level 5
+        L-->>C: Cache-Control: max-age=60
+        C-->>B: 0.09 s, then cached at the edge
+    end
+
+    Note over B: first paint under 0.1 s<br/>Tonight ⇄ Record reuses the browser cache
+```
 
 ---
 

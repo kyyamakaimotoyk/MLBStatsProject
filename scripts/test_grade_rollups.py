@@ -27,7 +27,7 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.db import get_engine  # noqa: E402
-from core.market import with_market  # noqa: E402
+from core.market import no_vig, no_vig_sql, with_market  # noqa: E402
 from orchestration import grades  # noqa: E402
 
 FAILURES: list[str] = []
@@ -138,26 +138,150 @@ def test_matches_base_tables(days: int) -> None:
         check(f"batter {col} matches for every day", bad == 0, f"{bad} mismatched")
 
 
+def test_no_vig_sql_matches_python() -> None:
+    """core/market.py deliberately expresses the no-vig conversion twice —
+    once in Python for row-level work, once in SQL so the perf rollup can
+    aggregate without dragging ~660k rows into pandas. This is the test that
+    licenses that duplication."""
+    print("no_vig SQL and Python agree")
+    engine = get_engine()
+    rows = pd.read_sql(text(f"""
+        SELECT ml_home, ml_away,
+               {no_vig_sql('ml_home', 'ml_away')} AS sql_p
+        FROM odds_lines
+        WHERE ml_home IS NOT NULL AND ml_away IS NOT NULL
+    """), engine)
+    # no_vig returns a numpy array, not a Series — build one so the band
+    # comparison below uses the same inclusive semantics as pandas .between().
+    py = pd.Series(no_vig(rows["ml_home"], rows["ml_away"]), index=rows.index)
+    worst = float((py - rows["sql_p"]).abs().max())
+    check("identical on every captured line", worst < 1e-12,
+          f"{len(rows):,} lines, worst absolute difference {worst:.1e}")
+    # The band decides which rows count toward the market columns, so a
+    # disagreement exactly at the edge would silently change the population.
+    band_py = py.between(0.20, 0.85)
+    band_sql = rows["sql_p"].between(0.20, 0.85)
+    check("same rows fall inside the [0.20, 0.85] plausibility band",
+          int((band_py != band_sql).sum()) == 0,
+          f"{int(band_py.sum()):,} in band")
+
+
+def test_perf_rollups_match_base_tables(days: int) -> None:
+    print(f"perf rollups agree with the base tables (last {days} days)")
+    engine = get_engine()
+
+    truth = pd.read_sql(text(f"""
+        SELECT p.model_type, p.model_version, count(*) AS n,
+               avg(((p.p_home >= 0.5) = (g.home_score > g.away_score))::int) AS win_acc,
+               avg(abs(g.home_score - g.away_score - p.pred_margin)) AS margin_mae
+        FROM model_predictions p JOIN games g USING (game_pk)
+        WHERE g.is_final AND g.game_date >= {grades.ET_TODAY} - :days
+        GROUP BY 1, 2
+    """), engine, params={"days": days})
+    roll = pd.read_sql(text(f"""
+        SELECT model_type, model_version, sum(n) AS n,
+               sum(win_correct)::double precision / nullif(sum(win_n), 0) AS win_acc,
+               sum(margin_err_sum) / nullif(sum(margin_n), 0) AS margin_mae
+        FROM model_perf_daily
+        WHERE game_date >= {grades.ET_TODAY} - :days
+        GROUP BY 1, 2
+    """), engine, params={"days": days})
+    m = truth.merge(roll, on=["model_type", "model_version"], suffixes=("_b", "_r"))
+    check("same set of model variants",
+          len(truth) == len(roll) == len(m),
+          f"base={len(truth)} rollup={len(roll)}")
+    check("n matches for every variant", int((m["n_b"] != m["n_r"]).sum()) == 0)
+    for col in ("win_acc", "margin_mae"):
+        bad = int((~np.isclose(m[f"{col}_b"].astype(float), m[f"{col}_r"].astype(float),
+                               rtol=1e-9, atol=1e-12, equal_nan=True)).sum())
+        check(f"{col} matches for every variant", bad == 0, f"{bad} mismatched")
+
+    tb = pd.read_sql(text(f"""
+        SELECT b.model_version, count(*) AS n,
+               avg(power(b.p_hit - (bg.h >= 1)::int, 2)) AS brier_p_hit
+        FROM batter_predictions b
+        JOIN batter_game_lines bg USING (game_pk, player_id)
+        JOIN games g ON g.game_pk = b.game_pk
+        WHERE g.is_final AND g.game_date >= {grades.ET_TODAY} - :days
+        GROUP BY 1
+    """), engine, params={"days": days})
+    rb = pd.read_sql(text(f"""
+        SELECT model_version, sum(n) AS n,
+               sum(brier_hit_sum) / nullif(sum(brier_hit_n), 0) AS brier_p_hit
+        FROM batter_perf_daily
+        WHERE game_date >= {grades.ET_TODAY} - :days
+        GROUP BY 1
+    """), engine, params={"days": days})
+    mb = tb.merge(rb, on="model_version", suffixes=("_b", "_r"))
+    check("same set of batter model versions",
+          len(tb) == len(rb) == len(mb), f"base={len(tb)} rollup={len(rb)}")
+    check("batter n matches", int((mb["n_b"] != mb["n_r"]).sum()) == 0)
+    bad = int((~np.isclose(mb["brier_p_hit_b"].astype(float),
+                           mb["brier_p_hit_r"].astype(float),
+                           rtol=1e-9, atol=1e-12, equal_nan=True)).sum())
+    check("brier_p_hit matches for every version", bad == 0, f"{bad} mismatched")
+
+
+def _frames_match(a: pd.DataFrame, b: pd.DataFrame) -> tuple[bool, str]:
+    """Compare two reads of the same rollup.
+
+    Not .equals(). The stored float SUMS are produced by Postgres aggregates,
+    and parallel aggregation does not fix the summation order — float addition
+    is not associative, so two identical refreshes can land ~1e-15 apart. That
+    is reproducibility to float precision, which is the strongest guarantee
+    available here; requiring bit equality would fail on nothing but worker
+    scheduling. Integer columns still have to match exactly, because a real
+    drift shows up there first.
+    """
+    if a.shape != b.shape or list(a.columns) != list(b.columns):
+        return False, f"shape {a.shape} vs {b.shape}"
+    for col in a.columns:
+        x, y = a[col], b[col]
+        if pd.api.types.is_float_dtype(x) or pd.api.types.is_float_dtype(y):
+            bad = int((~np.isclose(x.astype(float), y.astype(float),
+                                   rtol=1e-12, atol=0, equal_nan=True)).sum())
+            if bad:
+                return False, f"{col}: {bad} value(s) beyond 1e-12 relative"
+        elif not x.equals(y):
+            return False, f"{col}: {int((x != y).sum())} value(s) differ"
+    return True, f"{len(a)} rows"
+
+
 def test_incremental_equals_full(days: int) -> None:
     """An incremental refresh must not change what a full rebuild produced —
     otherwise the site's numbers depend on pipeline timing."""
     print(f"incremental refresh reproduces the full rebuild (last {days} days)")
     engine = get_engine()
-    cols = ("SELECT game_pk, correct, margin_err, market_p_home FROM pred_grades "
-            f"WHERE game_date >= {grades.ET_TODAY} - :days ORDER BY game_pk")
-    before = pd.read_sql(text(cols), engine, params={"days": days})
-    bcols = ("SELECT game_date, n, model_correct, hr_watch_hits FROM batter_grades_daily "
-             f"WHERE game_date >= {grades.ET_TODAY} - :days ORDER BY game_date")
-    bbefore = pd.read_sql(text(bcols), engine, params={"days": days})
+    # Every ORDER BY here must be the table's full primary key. Sorting on a
+    # prefix leaves ties in undefined order, and the comparison then fails on
+    # row shuffling rather than on any change in the data.
+    queries = {
+        "pred_grades":
+            "SELECT game_pk, correct, margin_err, market_p_home FROM pred_grades "
+            f"WHERE game_date >= {grades.ET_TODAY} - :days ORDER BY game_pk",
+        "batter_grades_daily":
+            "SELECT game_date, n, model_correct, hr_watch_hits "
+            f"FROM batter_grades_daily WHERE game_date >= {grades.ET_TODAY} - :days "
+            "ORDER BY game_date",
+        "model_perf_daily":
+            "SELECT game_date, model_type, model_version, n, win_correct, mkt_n, "
+            "margin_err_sum FROM model_perf_daily "
+            f"WHERE game_date >= {grades.ET_TODAY} - :days "
+            "ORDER BY game_date, model_type, model_version",
+        "batter_perf_daily":
+            "SELECT game_date, model_version, n, brier_hit_sum FROM batter_perf_daily "
+            f"WHERE game_date >= {grades.ET_TODAY} - :days "
+            "ORDER BY game_date, model_version",
+    }
+    before = {t: pd.read_sql(text(q), engine, params={"days": days})
+              for t, q in queries.items()}
 
     grades.refresh(days=days)
 
-    after = pd.read_sql(text(cols), engine, params={"days": days})
-    bafter = pd.read_sql(text(bcols), engine, params={"days": days})
-    check("pred_grades unchanged by a re-refresh", before.equals(after),
-          f"{len(before)} rows")
-    check("batter_grades_daily unchanged by a re-refresh", bbefore.equals(bafter),
-          f"{len(bbefore)} rows")
+    for table, q in queries.items():
+        after = pd.read_sql(text(q), engine, params={"days": days})
+        ok, detail = _frames_match(before[table], after)
+        check(f"{table} unchanged by a re-refresh", ok, detail)
 
 
 def main() -> None:
@@ -165,7 +289,9 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=120)
     args = ap.parse_args()
 
+    test_no_vig_sql_matches_python()
     test_matches_base_tables(args.days)
+    test_perf_rollups_match_base_tables(args.days)
     test_incremental_equals_full(args.days)
 
     print()

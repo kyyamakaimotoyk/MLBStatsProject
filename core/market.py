@@ -34,6 +34,23 @@ def no_vig(ml_home, ml_away):
     return ph / (ph + pa)
 
 
+def no_vig_sql(ml_home: str, ml_away: str) -> str:
+    """The same conversion as no_vig(), as a SQL expression.
+
+    Exists so aggregate rollups can do the arithmetic in Postgres instead of
+    dragging ~660k rows into pandas to divide two numbers. This is the one
+    place the formula is allowed to appear twice, and
+    scripts/test_grade_rollups.py asserts the two agree on live data — if you
+    edit one, edit both and run that test.
+    """
+    def implied(a: str) -> str:
+        return (f"(CASE WHEN {a} < 0 "
+                f"THEN -({a})::double precision / (-({a})::double precision + 100.0) "
+                f"ELSE 100.0 / (({a})::double precision + 100.0) END)")
+    ph, pa = implied(ml_home), implied(ml_away)
+    return f"({ph} / ({ph} + {pa}))"
+
+
 def with_market(df: pd.DataFrame) -> pd.DataFrame:
     """Collapse the raw closing/opening captures into `market_p_home` and
     `market_total`, dropping the six source columns.

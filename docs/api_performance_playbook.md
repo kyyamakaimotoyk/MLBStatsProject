@@ -721,6 +721,43 @@ the grading from base tables the long way and diffs it against the rollup, and
 checks that an incremental refresh reproduces a full rebuild — so the numbers
 can't depend on when the pipeline happened to run.
 
+### Fourth pass: a second rollup at a different grain
+
+`/api/performance` was the last endpoint still aggregating the append-only
+tables — 1,609 ms of SQL, of which the market half alone shipped **124,504
+rows** to compute 87. It is now `model_perf_daily` + `batter_perf_daily`
+(migration `0017`), and the whole endpoint is **19.5 ms** server-side.
+
+The generalisable part is why it could not reuse the existing rollup:
+
+**Match the grain to the question, not to the table you already have.**
+`pred_grades` resolves each game to the one published prediction. That is
+exactly right for a public track record and exactly wrong here, because this
+page compares model *variants* — collapsing would erase the comparison. Same
+source tables, incompatible grain, second rollup. Resist the urge to overload
+the first one.
+
+**Store sums and counts, never averages.** An average is not additive across
+days: summing daily means weights a 4-game Monday like a 15-game Saturday.
+Each metric keeps its own numerator *and* denominator — its own, because
+`avg()` skips NULLs per column independently, so one shared `n` would make a
+reconstructed average quietly wrong the day a model writes a NULL.
+
+**Float sums are not bit-reproducible, and a test that demands it will lie to
+you.** The first run of the incremental-equals-full check failed on both new
+tables. Neither was a data bug: one snapshot query sorted on a *prefix* of the
+primary key, so ties came back shuffled; and Postgres parallel aggregation
+does not fix summation order, so two identical refreshes land ~1e-15 apart.
+Compare integer columns exactly, float columns with a relative tolerance, and
+always sort on the **full** primary key.
+
+**A formula may live in two languages if a test says they agree.** The no-vig
+conversion is now in `core/market.py` twice — Python for row work, SQL so this
+rollup aggregates without dragging 660k rows into pandas. The parity test
+compares both over every captured line: bit-identical on all 25,886, including
+which rows fall inside the plausibility band, since that decides the
+population.
+
 ### What this does *not* fix
 
 Being explicit, so the next person doesn't over-trust it:

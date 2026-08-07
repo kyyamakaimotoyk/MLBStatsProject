@@ -150,55 +150,52 @@ def batters(date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
 
 @app.get("/api/performance")
 def performance(days: int = Query(30, le=365)):
-    """Rolling accuracy/MAE per model against final scores."""
+    """Rolling accuracy/MAE per model against final scores.
+
+    Reads the per-variant daily rollups (model_perf_daily, batter_perf_daily)
+    rather than re-aggregating the append-only prediction tables. Note these
+    are a different grain from pred_grades: this page compares model VARIANTS,
+    so it must not collapse to the one published prediction per game.
+
+    Averages are reconstructed as sum(numerator)/sum(denominator). Summing the
+    stored daily means instead would weight a 4-game Monday like a 15-game
+    Saturday; each metric therefore carries its own denominator, because avg()
+    skips NULLs per column independently.
+    """
     team = _df(f"""
-        SELECT p.model_type, p.model_version, count(*) AS n,
-               avg(((p.p_home >= 0.5) = (g.home_score > g.away_score))::int) AS win_acc,
-               avg(abs(g.home_score - g.away_score - p.pred_margin)) AS margin_mae,
-               avg(abs(g.home_score + g.away_score - p.pred_total)) AS total_mae
-        FROM model_predictions p
-        JOIN games g USING (game_pk)
-        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
+        SELECT model_type, model_version, sum(n) AS n,
+               sum(win_correct)::double precision
+                   / nullif(sum(win_n), 0)    AS win_acc,
+               sum(margin_err_sum) / nullif(sum(margin_n), 0) AS margin_mae,
+               sum(total_err_sum)  / nullif(sum(total_n), 0)  AS total_mae
+        FROM model_perf_daily
+        WHERE game_date >= {ET_TODAY} - :days
         GROUP BY 1, 2 ORDER BY 1, 2
     """, days=days)
     batter = _df(f"""
-        SELECT b.model_version, count(*) AS n,
-               avg(power(b.p_hit - (bg.h >= 1)::int, 2)) AS brier_p_hit,
-               avg(power(b.p_hr - (bg.hr >= 1)::int, 2)) AS brier_p_hr,
-               avg(abs(bg.h - b.exp_h)) AS mae_h
-        FROM batter_predictions b
-        JOIN batter_game_lines bg USING (game_pk, player_id)
-        JOIN games g ON g.game_pk = b.game_pk
-        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
-        GROUP BY 1
+        SELECT model_version, sum(n) AS n,
+               sum(brier_hit_sum) / nullif(sum(brier_hit_n), 0) AS brier_p_hit,
+               sum(brier_hr_sum)  / nullif(sum(brier_hr_n), 0)  AS brier_p_hr,
+               sum(mae_h_sum)     / nullif(sum(mae_h_n), 0)     AS mae_h
+        FROM batter_perf_daily
+        WHERE game_date >= {ET_TODAY} - :days
+        GROUP BY 1 ORDER BY 1
     """, days=days)
-
-    market_df = pd.read_sql(text(f"""
-        SELECT p.model_type, p.model_version, p.p_home,
-               o.ml_home, o.ml_away,
-               g.home_score > g.away_score AS home_won
-        FROM model_predictions p
-        JOIN games g USING (game_pk)
-        JOIN LATERAL (
-            SELECT * FROM odds_lines o
-            WHERE o.game_pk = p.game_pk AND o.is_closing
-              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
-            ORDER BY o.captured_at DESC LIMIT 1
-        ) o ON TRUE
-        WHERE g.is_final AND g.game_date >= {ET_TODAY} - :days
-    """), get_engine(), params={"days": days})
-    market = []
-    if not market_df.empty:
-        market_df["market_p"] = _no_vig(market_df["ml_home"], market_df["ml_away"])
-        market_df = market_df[market_df["market_p"].between(0.20, 0.85)]
-        for (mtype, mver), grp in market_df.groupby(["model_type", "model_version"]):
-            market.append({
-                "model_type": mtype, "model_version": mver, "n": int(len(grp)),
-                "model_acc": float(((grp["p_home"] >= 0.5) == grp["home_won"]).mean()),
-                "market_acc": float(((grp["market_p"] > 0.5) == grp["home_won"]).mean()),
-                "pick_agreement": float(((grp["p_home"] >= 0.5)
-                                         == (grp["market_p"] > 0.5)).mean()),
-            })
+    # HAVING, not WHERE: a variant with no plausible closing line in the window
+    # is absent from this list entirely, which is what the pandas groupby it
+    # replaces did (empty groups never materialised).
+    market = _df(f"""
+        SELECT model_type, model_version, sum(mkt_n) AS n,
+               sum(mkt_model_correct)::double precision
+                   / nullif(sum(mkt_n), 0) AS model_acc,
+               sum(mkt_market_correct)::double precision
+                   / nullif(sum(mkt_n), 0) AS market_acc,
+               sum(mkt_pick_agree)::double precision
+                   / nullif(sum(mkt_n), 0) AS pick_agreement
+        FROM model_perf_daily
+        WHERE game_date >= {ET_TODAY} - :days
+        GROUP BY 1, 2 HAVING sum(mkt_n) > 0 ORDER BY 1, 2
+    """, days=days)
     return {"days": days, "team": team, "batter": batter, "market": market}
 
 

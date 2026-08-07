@@ -29,7 +29,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from core.db import get_engine
-from core.market import with_market
+from core.market import no_vig_sql, with_market
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +152,93 @@ _UPSERT_BATTER_DAYS = f"""
 """
 
 
+# /api/performance compares model VARIANTS, so unlike pred_grades this keeps
+# every (model_type, model_version) apart rather than resolving to the
+# published row. Sums and counts only — averages are not additive across days.
+_UPSERT_MODEL_PERF = f"""
+    INSERT INTO model_perf_daily (
+        game_date, model_type, model_version, n, win_correct, win_n,
+        margin_err_sum, margin_n, total_err_sum, total_n,
+        mkt_n, mkt_model_correct, mkt_market_correct, mkt_pick_agree,
+        refreshed_at)
+    SELECT g.game_date, p.model_type, p.model_version,
+           count(*),
+           count(*) FILTER (
+               WHERE (p.p_home >= 0.5) = (g.home_score > g.away_score)),
+           count((p.p_home >= 0.5) = (g.home_score > g.away_score)),
+           coalesce(sum(abs(g.home_score - g.away_score - p.pred_margin)
+                        ::double precision), 0),
+           count(abs(g.home_score - g.away_score - p.pred_margin)),
+           coalesce(sum(abs(g.home_score + g.away_score - p.pred_total)
+                        ::double precision), 0),
+           count(abs(g.home_score + g.away_score - p.pred_total)),
+           -- Market columns: only the rows with a plausible closing line
+           -- contribute, so every one is FILTERed on mkt_ok.
+           count(*) FILTER (WHERE m.mkt_ok),
+           count(*) FILTER (WHERE m.mkt_ok
+               AND (p.p_home >= 0.5) = (g.home_score > g.away_score)),
+           count(*) FILTER (WHERE m.mkt_ok
+               AND (m.market_p > 0.5) = (g.home_score > g.away_score)),
+           count(*) FILTER (WHERE m.mkt_ok
+               AND (p.p_home >= 0.5) = (m.market_p > 0.5)),
+           now()
+    FROM model_predictions p
+    JOIN games g USING (game_pk)
+    LEFT JOIN LATERAL (
+        SELECT mp.market_p, mp.market_p BETWEEN 0.20 AND 0.85 AS mkt_ok
+        FROM (
+            SELECT {no_vig_sql("o.ml_home", "o.ml_away")} AS market_p
+            FROM odds_lines o
+            WHERE o.game_pk = p.game_pk AND o.is_closing
+              AND o.ml_home IS NOT NULL AND o.ml_away IS NOT NULL
+            ORDER BY o.captured_at DESC LIMIT 1
+        ) mp
+    ) m ON TRUE
+    WHERE g.is_final AND g.game_date >= :since
+    GROUP BY 1, 2, 3
+    ON CONFLICT (game_date, model_type, model_version) DO UPDATE SET
+        n = EXCLUDED.n,
+        win_correct = EXCLUDED.win_correct, win_n = EXCLUDED.win_n,
+        margin_err_sum = EXCLUDED.margin_err_sum, margin_n = EXCLUDED.margin_n,
+        total_err_sum = EXCLUDED.total_err_sum, total_n = EXCLUDED.total_n,
+        mkt_n = EXCLUDED.mkt_n,
+        mkt_model_correct = EXCLUDED.mkt_model_correct,
+        mkt_market_correct = EXCLUDED.mkt_market_correct,
+        mkt_pick_agree = EXCLUDED.mkt_pick_agree,
+        refreshed_at = now()
+"""
+
+_UPSERT_BATTER_PERF = """
+    INSERT INTO batter_perf_daily (
+        game_date, model_version, n, brier_hit_sum, brier_hit_n,
+        brier_hr_sum, brier_hr_n, mae_h_sum, mae_h_n, refreshed_at)
+    SELECT g.game_date, b.model_version, count(*),
+           coalesce(sum(power(b.p_hit - (bg.h >= 1)::int, 2)
+                        ::double precision), 0),
+           count(power(b.p_hit - (bg.h >= 1)::int, 2)),
+           coalesce(sum(power(b.p_hr - (bg.hr >= 1)::int, 2)
+                        ::double precision), 0),
+           count(power(b.p_hr - (bg.hr >= 1)::int, 2)),
+           coalesce(sum(abs(bg.h - b.exp_h)::double precision), 0),
+           count(abs(bg.h - b.exp_h)),
+           now()
+    FROM batter_predictions b
+    JOIN batter_game_lines bg USING (game_pk, player_id)
+    JOIN games g ON g.game_pk = b.game_pk
+    WHERE g.is_final AND g.game_date >= :since
+    GROUP BY 1, 2
+    ON CONFLICT (game_date, model_version) DO UPDATE SET
+        n = EXCLUDED.n,
+        brier_hit_sum = EXCLUDED.brier_hit_sum,
+        brier_hit_n = EXCLUDED.brier_hit_n,
+        brier_hr_sum = EXCLUDED.brier_hr_sum,
+        brier_hr_n = EXCLUDED.brier_hr_n,
+        mae_h_sum = EXCLUDED.mae_h_sum,
+        mae_h_n = EXCLUDED.mae_h_n,
+        refreshed_at = now()
+"""
+
+
 def refresh(days: int = DEFAULT_DAYS, full: bool = False) -> dict[str, int]:
     """Rebuild the rollups for the trailing `days`, or all history if `full`.
 
@@ -180,16 +267,25 @@ def refresh(days: int = DEFAULT_DAYS, full: bool = False) -> dict[str, int]:
                      {"since": since})
         conn.execute(text(_UPSERT_BATTER_DAYS), {"since": since})
 
+        # /api/performance rollups (per model variant, not per published row).
+        conn.execute(text("DELETE FROM model_perf_daily WHERE game_date >= :since"),
+                     {"since": since})
+        conn.execute(text(_UPSERT_MODEL_PERF), {"since": since})
+        conn.execute(text("DELETE FROM batter_perf_daily WHERE game_date >= :since"),
+                     {"since": since})
+        conn.execute(text(_UPSERT_BATTER_PERF), {"since": since})
+
         counts = {
-            "pred_grades": conn.execute(
-                text("SELECT count(*) FROM pred_grades")).scalar(),
-            "batter_grades_daily": conn.execute(
-                text("SELECT count(*) FROM batter_grades_daily")).scalar(),
-            "games_written": len(raw),
+            table: conn.execute(text(f"SELECT count(*) FROM {table}")).scalar()
+            for table in ("pred_grades", "batter_grades_daily",
+                          "model_perf_daily", "batter_perf_daily")
         }
-    log.info("grade rollups: %s games in window, %s total, %s batter days",
-             counts["games_written"], counts["pred_grades"],
-             counts["batter_grades_daily"])
+        counts["games_written"] = len(raw)
+    log.info("rollups refreshed: pred_grades=%s (%s in window) "
+             "batter_grades_daily=%s model_perf_daily=%s batter_perf_daily=%s",
+             counts["pred_grades"], counts["games_written"],
+             counts["batter_grades_daily"], counts["model_perf_daily"],
+             counts["batter_perf_daily"])
     return counts
 
 
@@ -203,8 +299,9 @@ def main() -> None:
                     help="rebuild all history; needed after a walk-forward backfill")
     args = ap.parse_args()
     counts = refresh(days=args.days, full=args.full)
-    print(f"pred_grades={counts['pred_grades']:,}  "
-          f"batter_grades_daily={counts['batter_grades_daily']:,}")
+    for table in ("pred_grades", "batter_grades_daily",
+                  "model_perf_daily", "batter_perf_daily"):
+        print(f"  {table:<20} {counts[table]:>8,}")
 
 
 if __name__ == "__main__":

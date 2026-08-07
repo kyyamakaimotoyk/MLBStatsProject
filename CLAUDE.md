@@ -138,12 +138,19 @@ cd web; npm run dev                              # local frontend on :3000
 .venv\Scripts\python visualization\site_traffic.py   # local-only traffic dashboard on :8050
 ```
 
-The track record is served from **rollup tables**, not recomputed per request:
-`pred_grades` (one row per graded game) and `batter_grades_daily` (one row per
-day) resolve "which of the ~81 append-only prediction rows per game is the
-published one" once, on write. `orchestration/grades.py` refreshes them at the
-end of every daily run and on every `--scores-only` tick; the API only ever
-does an indexed range scan over them.
+The track record is served from **rollup tables**, not recomputed per request.
+`orchestration/grades.py` builds all four at the end of every daily run and on
+every `--scores-only` tick; the API only ever does an indexed range scan.
+
+Two grains, and they are not interchangeable:
+- `pred_grades` / `batter_grades_daily` resolve "which of the ~81 append-only
+  prediction rows per game is the published one" once, on write. This is what
+  the public track record (`/api/public/*`) reads.
+- `model_perf_daily` / `batter_perf_daily` keep every `(model_type,
+  model_version)` **apart**, per day, because `/api/performance` exists to
+  compare model variants — collapsing to the published row would erase the
+  comparison. They store sums and counts, never averages: an average is not
+  additive across days, so the endpoint divides at read time.
 
 ```powershell
 .venv\Scripts\python -m orchestration.grades           # trailing 30 days

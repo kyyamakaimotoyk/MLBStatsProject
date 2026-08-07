@@ -117,8 +117,20 @@ policy lives at `/privacy` and is translated like everything else.
 ```powershell
 .venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
 cd web; npm run dev                              # local frontend on :3000
+.venv\Scripts\python scripts\test_api_cache.py   # public-API read cache (no DB needed)
 .venv\Scripts\python visualization\site_traffic.py   # local-only traffic dashboard on :8050
 ```
+
+Public read endpoints are cached in-process (`api/cache.py`): a TTL plus
+single-flight and stale-while-revalidate, primed at startup by the `lifespan`
+warm-up in `api/main.py`. TTLs come from the pipeline schedule, so anything
+that changes how often the pipeline writes should move `FEED_TTL`/`RECORD_TTL`
+in `api/public.py` too. The cache is process-local by design — it dies on
+deploy and would be per-task if the API ever scales out. Endpoints must stay
+window-scoped: pages request the span they render (`?days=`), never the whole
+archive. `docs/api_performance_playbook.md` records how the 30-second page
+loads were diagnosed and what is still outstanding (rollup tables, CloudFront
+on the API, task sizing).
 
 Site analytics: CloudFront access logs land in `mlb-stats-logs-<account>`
 under `cf-site/` (90-day TTL) and are queried through Athena (Glue table

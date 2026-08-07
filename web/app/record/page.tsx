@@ -8,7 +8,7 @@ import { pctLabel } from "@/lib/copy";
 import { useLang } from "@/lib/i18n";
 import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
 import AdSlot from "@/components/AdSlot";
-import { sinceDate, WindowKey } from "@/lib/windows";
+import { daysBack, sinceDate, WindowKey } from "@/lib/windows";
 import {
   BatterSkillCurveChart,
   HrWatchCurveChart,
@@ -26,14 +26,33 @@ export default function RecordPage() {
   const [feed, setFeed] = useState<Feed | null>(null);
   const [rows, setRows] = useState<ResultRow[] | null>(null);
   const [batterDays, setBatterDays] = useState<BatterDay[] | null>(null);
-  const [win, setWin] = useState<WindowKey>("3m");
+  const [win, setWin] = useState<WindowKey>("2m");
 
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
     getFeed(21).then(setFeed).catch(() => {});
-    getJSON<ResultRow[]>("/api/public/results").then(setRows).catch(() => {});
-    getJSON<BatterDay[]>("/api/public/batter-results").then(setBatterDays).catch(() => {});
   }, []);
+
+  // The window used to filter an already-fetched archive in the browser; now
+  // it drives the request. `live` guards against a slow wide window landing
+  // after the reader has already switched to a narrow one — every number on
+  // this page is labelled with the window it came from, so showing one
+  // window's rows under another's heading would be a lie.
+  useEffect(() => {
+    let live = true;
+    const days = daysBack(win);
+    setRows(null);
+    setBatterDays(null);
+    getJSON<ResultRow[]>(`/api/public/results?days=${days}`)
+      .then((r) => live && setRows(r))
+      .catch(() => {});
+    getJSON<BatterDay[]>(`/api/public/batter-results?days=${days}`)
+      .then((b) => live && setBatterDays(b))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [win]);
 
   const gradedGames = (feed?.days ?? [])
     .flatMap((d) => d.games)
@@ -99,6 +118,7 @@ export default function RecordPage() {
           />
         </div>
       )}
+      {!rows && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
       {rows && view.length === 0 && (
         <p className="text-sm text-zinc-500">{t.record.noGraded}</p>
       )}

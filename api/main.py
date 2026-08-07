@@ -8,11 +8,13 @@ Runs locally for now:
 """
 
 import os
+from contextlib import asynccontextmanager
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import text
 
 from core.db import get_engine
@@ -25,13 +27,54 @@ def _no_vig(ml_home: pd.Series, ml_away: pd.Series) -> pd.Series:
     ph, pa = implied(ml_home), implied(ml_away)
     return ph / (ph + pa)
 
-app = FastAPI(title="MLB Stats API", version="0.1")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Prime the read cache in the background so the first visitor after a
+    deploy doesn't pay for a cold process. Warms exactly what the site's two
+    default page loads ask for; anything else fills in on demand."""
+    from api import public
+    from api.cache import warm
+
+    warm([
+        (public.summary, {}),
+        (public.feed, {"days": 7}),           # Tonight, initial day tables
+        (public.feed, {"days": 21}),          # Record, three-week strip
+        (public.results, {"days": 30}),       # Tonight, default 1m window
+        (public.results, {"days": 60}),       # Record, default 2m window
+        (public.batter_results, {"days": 60}),
+    ])
+    yield
+
+
+app = FastAPI(title="MLB Stats API", version="0.1", lifespan=lifespan)
+
+# Middleware order: the last one added is the outermost, so CORS must be added
+# last — its headers have to survive on every response, including the
+# compressed ones and the error paths.
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def public_cache_headers(request: Request, call_next):
+    """Let the browser (and a CDN, if one is ever put in front of this) reuse
+    these responses. Without it, moving between Tonight and Record refetches
+    the same track record from scratch. The windows are deliberately shorter
+    than the server-side TTLs — this is the last cache to go stale and the
+    only one we cannot flush."""
+    response = await call_next(request)
+    if (request.method == "GET" and response.status_code == 200
+            and request.url.path.startswith("/api/public/")):
+        response.headers["Cache-Control"] = (
+            "public, max-age=60, stale-while-revalidate=600")
+    return response
+
 
 from api.public import ET_TODAY, router as public_router  # noqa: E402
 

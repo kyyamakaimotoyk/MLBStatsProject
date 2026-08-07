@@ -20,16 +20,33 @@ export default function HomePage() {
   const [showDays, setShowDays] = useState(4);
   const [win, setWin] = useState<WindowKey>("1m");
 
+  // Fetch the span we are about to draw, not the whole archive. The day
+  // tables render four days at a time, so start at a week and widen only when
+  // the reader asks for more.
+  const feedDays = Math.min(Math.max(showDays + 3, 7), daysBack(win), 90);
+
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
-    getJSON<ResultRow[]>("/api/public/results").then(setRows).catch(() => {});
   }, []);
 
   useEffect(() => {
-    setFeed(null);
-    getFeed(Math.min(daysBack(win), 90))
-      .then(setFeed)
-      .catch((e) => setError(String(e)));
+    let live = true;
+    getFeed(feedDays)
+      .then((f) => live && setFeed(f))
+      .catch((e) => live && setError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [feedDays]);
+
+  useEffect(() => {
+    let live = true;
+    getJSON<ResultRow[]>(`/api/public/results?days=${daysBack(win)}`)
+      .then((r) => live && setRows(r))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, [win]);
 
   const todayStr = today(); // site clock: US Eastern, not the viewer's timezone

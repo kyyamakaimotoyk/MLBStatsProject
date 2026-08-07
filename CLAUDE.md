@@ -91,11 +91,14 @@ Public site: **https://moundmodel.com** (S3+CloudFront static export) with the
 API at **https://api.moundmodel.com** (Fargate service behind an ALB, itself
 behind CloudFront — `infra/api_cdn.tf`). Both distributions are PriceClass_200
 so Asian edges serve Japanese readers. The CDN reaches the ALB via
-`api-origin.moundmodel.com`, which stays directly reachable: hit it to tell a
-CloudFront problem from an origin one. The API cache policy keys on query
-strings **and** the `Origin` header — CORS is apex+www, not `*`, so dropping
-Origin from the key would serve www visitors a response permitting only the
-apex.
+`api-origin.moundmodel.com`, and **the ALB security group admits only
+CloudFront's origin-facing prefix list** — there is no way to reach the API
+except through the CDN, by design. So `curl api-origin...` will hang: to
+isolate an origin problem, read CloudWatch `/ecs/mlb-stats-api` or widen the
+group in `infra/api_service.tf` temporarily. The API cache policy keys on
+query strings **and** the `Origin` header — CORS is apex+www, not `*`, so
+dropping Origin from the key would serve www visitors a response permitting
+only the apex.
 Site changes ship automatically: any push to master touching `web/**` runs
 `.github/workflows/deploy-site.yml` (build with the prod API URL -> S3 sync ->
 CloudFront invalidation, via the OIDC role in `infra/deploy_ci.tf`). Manual

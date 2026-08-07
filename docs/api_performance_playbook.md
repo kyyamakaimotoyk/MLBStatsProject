@@ -636,8 +636,13 @@ which loops. The fix is a dedicated `api-origin.<domain>` with its own
 certificate, attached to the existing HTTPS listener as an extra SNI cert.
 Resist the tempting shortcut of adding a SAN to the main site certificate: that
 forces a cert *replacement* and churns the live site distribution and ALB
-listener for no benefit. As a bonus, the origin hostname stays directly
-reachable, which is how you tell a CDN problem from an origin problem.
+listener for no benefit.
+
+That origin hostname is initially reachable directly, which is convenient for
+telling a CDN problem from an origin problem — but treat it as temporary. It
+is published in Certificate Transparency logs the moment ACM issues the cert,
+so it is enumerable by anyone, and it is a documented route around your own
+cache. See the lockdown note below.
 
 **Put `Origin` in the cache key whenever CORS is not `*`.** If the API echoes
 the caller's origin into `access-control-allow-origin` (apex + www rather than
@@ -732,10 +737,38 @@ Being explicit, so the next person doesn't over-trust it:
   distribution after each run; for now the TTLs are short enough that it
   doesn't matter. Note CloudFront gives 1,000 free invalidation paths/month and
   `/*` counts as one.
-- **The ALB is still open to the internet** on `api-origin.<domain>`, so the
-  CDN can be bypassed. Locking the ALB security group to the
-  `com.amazonaws.global.cloudfront.origin-facing` prefix list would close that,
-  at the cost of the debugging path above.
+### Closing the CDN bypass
+
+Worth doing once the CDN is load-bearing, and worth understanding why it is
+not a confidentiality measure. The API is read-only, unauthenticated, and
+serves what the site publishes anyway — nothing behind the ALB is secret. What
+a bypass actually costs you is **capacity**: the edge cache is the only buffer
+in front of a single 0.25 vCPU task with no autoscaling, and a route around it
+puts arbitrary load straight onto that task and the database. It also makes
+any future WAF or rate limit attached to the distribution decorative.
+
+Do not rely on the origin hostname being obscure. Verified against public CT
+logs: `api-origin`, `api`, apex and `www` are all enumerable, because ACM
+publishes every certificate it issues.
+
+The fix is one ingress rule — replace `0.0.0.0/0` with the AWS-managed
+`com.amazonaws.global.cloudfront.origin-facing` prefix list. Three traps:
+
+- **Look the prefix list up with a data source, don't hardcode the id.** It
+  differs per region and AWS edits the contents.
+- **One port only.** The list holds ~45 entries and each counts toward the
+  60-rules-per-security-group quota, so it will not fit on both 80 and 443.
+  It doesn't need to — CloudFront reaches the origin over HTTPS.
+- **Do not touch the security group's `description`.** It is immutable in AWS,
+  so editing it forces a REPLACE rather than an in-place rule change, which
+  briefly leaves the load balancer and the task group pointing at different
+  ids and fails health checks. Put the explanation in a comment instead. Our
+  first plan showed `must be replaced` for exactly this reason; reverting the
+  description turned it into `0 to add, 1 to change, 0 to destroy`.
+
+Verify by proving both directions: a forced origin fetch through the CDN (a
+`?days=` value nothing has cached) still returns 200, and the origin hostname,
+the raw ALB DNS name, and port 80 all now hang.
 
 ---
 

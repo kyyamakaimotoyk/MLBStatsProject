@@ -46,9 +46,10 @@ resource "aws_acm_certificate_validation" "api_origin" {
   validation_record_fqdns = [for r in aws_route53_record.api_origin_cert_validation : r.fqdn]
 }
 
-# The ALB picks this by SNI, so direct hits to the ALB on the original
-# api.<domain> certificate keep working — useful for bypassing the CDN when
-# debugging whether a problem is CloudFront's or the origin's.
+# The ALB picks this by SNI, alongside the original api.<domain> certificate
+# already on the listener. Note the ALB security group now admits only
+# CloudFront (see api_service.tf), so this cert is used exclusively for the
+# CDN's origin fetches — it is no longer a way to reach the ALB by hand.
 resource "aws_lb_listener_certificate" "api_origin" {
   listener_arn    = aws_lb_listener.api_https.arn
   certificate_arn = aws_acm_certificate_validation.api_origin.certificate_arn

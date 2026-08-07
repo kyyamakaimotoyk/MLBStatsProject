@@ -22,22 +22,43 @@ resource "aws_cloudwatch_log_group" "api" {
   retention_in_days = 30
 }
 
+# AWS-managed list of the addresses CloudFront uses to reach origins. Looked up
+# rather than hardcoded: the id differs per region, and AWS edits the contents
+# as the edge fleet changes.
+data "aws_ec2_managed_prefix_list" "cloudfront_origin" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 resource "aws_security_group" "alb" {
   vpc_id      = aws_vpc.main.id
-  name        = "${var.project}-alb"
+  name = "${var.project}-alb"
+  # NOTE: a security group's description is immutable in AWS, so editing this
+  # string forces Terraform to REPLACE the group — which briefly leaves the ALB
+  # and the task security group pointing at different ids and fails health
+  # checks. It is deliberately left at its original wording; the accurate
+  # description of what this group now does is the comment below.
   description = "Public HTTPS to the API load balancer"
+
+  # CloudFront is the only way in. Without this the CDN is trivially
+  # bypassable — api-origin.<domain> is published in Certificate Transparency
+  # logs, so the hostname is enumerable by anyone — and a bypass puts load
+  # straight onto a single 0.25 vCPU task with no autoscaling, skipping the
+  # edge cache that is this service's entire capacity buffer. It also makes
+  # any future WAF or rate limit attached to the distribution enforceable
+  # rather than decorative.
+  #
+  # 443 only. The prefix list holds ~45 entries and each counts toward the
+  # 60-rules-per-security-group quota, so it cannot go on two ports — and it
+  # does not need to: CloudFront reaches the origin with
+  # origin_protocol_policy = "https-only" (infra/api_cdn.tf).
   ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin.id]
+    description     = "HTTPS from CloudFront origin-facing ranges only"
   }
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -97,6 +118,11 @@ resource "aws_lb_listener" "api_https" {
   }
 }
 
+# Unreachable while the security group above is CloudFront-only (CloudFront
+# talks HTTPS to the origin, and nothing else can reach the ALB at all). Kept
+# so that re-opening port 80 is a one-line change rather than a rebuild, and
+# so a stray plaintext request gets a redirect instead of a connection reset
+# if the group is ever widened.
 resource "aws_lb_listener" "api_http_redirect" {
   load_balancer_arn = aws_lb.api.arn
   port              = 80

@@ -172,13 +172,15 @@ resource "aws_ecs_service" "api" {
   depends_on = [aws_lb_listener.api_https]
 }
 
+# Points at CloudFront, not the ALB — see api_cdn.tf. The ALB stays reachable
+# directly on api-origin.<domain> for isolating CDN problems from origin ones.
 resource "aws_route53_record" "api" {
   zone_id = data.aws_route53_zone.site.zone_id
   name    = "api.${var.site_domain}"
   type    = "A"
   alias {
-    name                   = aws_lb.api.dns_name
-    zone_id                = aws_lb.api.zone_id
+    name                   = aws_cloudfront_distribution.api.domain_name
+    zone_id                = aws_cloudfront_distribution.api.hosted_zone_id
     evaluate_target_health = false
   }
 }

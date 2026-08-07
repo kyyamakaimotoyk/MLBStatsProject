@@ -94,9 +94,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
       days = 30
     }
   }
+  # The API distribution logs one row per XHR, so this grows faster than the
+  # site prefix and has no Athena table pointed at it — it exists for cache
+  # hit-rate spot checks, not analytics.
+  rule {
+    id     = "expire-cf-api-logs"
+    status = "Enabled"
+    filter {
+      prefix = "cf-api/"
+    }
+    expiration {
+      days = 30
+    }
+  }
 }
 
 output "logs_bucket" {
-  description = "CloudFront access logs land here (prefix cf-site/); query with Athena"
+  description = "CloudFront access logs land here (cf-site/ and cf-api/); query with Athena"
   value       = aws_s3_bucket.logs.bucket
 }

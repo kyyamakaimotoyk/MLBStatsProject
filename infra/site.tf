@@ -85,7 +85,14 @@ resource "aws_cloudfront_distribution" "site" {
   enabled             = true
   default_root_object = "index.html"
   aliases             = [var.site_domain, "www.${var.site_domain}"]
-  price_class         = "PriceClass_100"
+
+  # _200 rather than _100 so Asian edges (Tokyo/Osaka) serve the HTML and JS.
+  # The site is bilingual EN/JA; on _100 its Japanese readers were fetching the
+  # bundle from a US or European edge, which costs more first-paint latency
+  # than the API calls it triggers. Japan bytes carry a ~34% rate premium, but
+  # CloudFront's always-free tier (1 TB + 10M requests/month, region-independent)
+  # is ~100x this site's traffic, so the class change is free in practice.
+  price_class = "PriceClass_200"
 
   # Access logs -> S3, queried through Athena. See cf_logs.tf for the bucket +
   # ACL setup and analytics.tf for the Glue table.

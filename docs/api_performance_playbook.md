@@ -436,7 +436,7 @@ behaviour a smoke test can't reach:
 
 **Results** (server-side; excludes WAN, which is unchanged until a CDN lands):
 
-| | Before | After |
+| Measurement | Before | After |
 |---|---|---|
 | `/api/public/summary` | 28–30 s | **0.003 s** |
 | `/api/public/batter-results` | 16 s | **0.004 s** (901 B gzipped) |
@@ -449,6 +449,51 @@ The cold-cache row is the honest worst case: a window nobody has requested
 within the TTL. The 30s cliff is gone even there, because the query is now
 bounded by a date filter.
 
+### Second pass: CloudFront on the API (items 6 and 7)
+
+Shipped immediately after, in `infra/api_cdn.tf`. Three things are worth
+carrying to another project:
+
+**The origin needs its own hostname.** CloudFront validates the origin's
+certificate against the *origin domain name*, so it cannot use the ALB's
+`*.elb.amazonaws.com` name (the cert covers your domain, not Amazon's) and it
+cannot use `api.<domain>` either — that becomes the distribution's own alias,
+which loops. The fix is a dedicated `api-origin.<domain>` with its own
+certificate, attached to the existing HTTPS listener as an extra SNI cert.
+Resist the tempting shortcut of adding a SAN to the main site certificate: that
+forces a cert *replacement* and churns the live site distribution and ALB
+listener for no benefit. As a bonus, the origin hostname stays directly
+reachable, which is how you tell a CDN problem from an origin problem.
+
+**Put `Origin` in the cache key whenever CORS is not `*`.** If the API echoes
+the caller's origin into `access-control-allow-origin` (apex + www rather than
+a wildcard), a shared cache that ignores the header will eventually hand a
+`www` visitor a response permitting only the apex, and the browser rejects it.
+Query strings matter for the same reason: the managed `CachingOptimized` policy
+*strips* them, which would collapse every `?days=` variant into one response.
+Both need a custom cache policy. Verify by requesting the same path from two
+origins twice and diffing the returned header.
+
+**Check the price class against where your readers are.** `PriceClass_100` is
+US/Mexico/Canada and Europe/Israel/Türkiye *only* — it does **not** include
+Japan, despite several AWS-hosted summaries and the CDK enum docs saying
+otherwise. `PriceClass_200` is the cheapest class with Tokyo/Osaka. Japan
+carries a ~34% per-GB premium ($0.114 vs $0.085), but CloudFront's always-free
+tier is 1 TB and 10M requests per month, permanent and region-independent, so
+below that scale the class change is free. ALB → CloudFront origin fetches are
+also free.
+
+Measured from Tokyo, `api.moundmodel.com`:
+
+| Measurement | ALB direct | Via CloudFront |
+|---|---|---|
+| TLS handshake | 0.556 s | **0.029 s** |
+| TTFB, cache hit | 0.74 s | **0.034 s** |
+
+The same change on the *site* distribution (static HTML/JS, `PriceClass_100` →
+`_200`) took its TTFB from 0.83 s to 0.072 s on edge hits — worth checking
+before assuming the API was the slow part.
+
 ### What this does *not* fix
 
 Being explicit, so the next person doesn't over-trust it:
@@ -458,10 +503,14 @@ Being explicit, so the next person doesn't over-trust it:
 - **The underlying queries are still O(history × versions).** A cold key still
   pays 1.5–2s. Only rollup tables (item 1) fix that.
 - **Nothing was done about the redundancy ratio**, the actual root cause.
-- **WAN latency is untouched** — still ~200ms RTT and a 0.6s TLS handshake
-  from Japan to us-east-1. That's item 6.
-- **No cache invalidation hook.** The pipeline could `POST` a purge after each
-  run; for now the TTLs are short enough that it doesn't matter.
+- **No cache invalidation hook.** The pipeline could invalidate the API
+  distribution after each run; for now the TTLs are short enough that it
+  doesn't matter. Note CloudFront gives 1,000 free invalidation paths/month and
+  `/*` counts as one.
+- **The ALB is still open to the internet** on `api-origin.<domain>`, so the
+  CDN can be bypassed. Locking the ALB security group to the
+  `com.amazonaws.global.cloudfront.origin-facing` prefix list would close that,
+  at the cost of the debugging path above.
 
 ---
 

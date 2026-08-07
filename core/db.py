@@ -9,6 +9,14 @@ infra/database.tf), so path 2 is the default: every fresh process picks up the
 current password and rotation never breaks anything. Long-running services
 (Phase 6) should rebuild the engine on authentication failure instead of
 caching one forever.
+
+Timeout guardrails (see _connect_args): one engine factory serves two very
+different workloads, so the defaults here are the ones that cannot break
+either. `connect_timeout` is always on — a TCP/TLS connect that hangs should
+never occupy a pool slot indefinitely. `statement_timeout` is OPT-IN, because
+the pipeline legitimately runs multi-minute statements and a blanket ceiling
+would kill a feature build or a walk-forward pull mid-run. The read-only API
+opts in via MLB_DB_STATEMENT_TIMEOUT in its task definition.
 """
 
 import json
@@ -36,6 +44,30 @@ def _resolve_password() -> str:
     return secret["password"]
 
 
+def _connect_args() -> dict:
+    """libpq connection parameters, including the timeout guardrails.
+
+    MLB_DB_CONNECT_TIMEOUT   seconds to wait for a connect (default 10)
+    MLB_DB_STATEMENT_TIMEOUT server-side ceiling per statement, passed through
+                             to Postgres verbatim — a bare number is
+                             milliseconds, or give a unit ("15s"). Unset means
+                             no ceiling, which is what the pipeline needs.
+    """
+    args = {
+        "sslmode": "require",
+        # Without this, an unreachable host blocks on the OS default (minutes)
+        # while holding a pool slot. With pool_size=5 on a single-worker API,
+        # a handful of those is the whole service.
+        "connect_timeout": int(os.getenv("MLB_DB_CONNECT_TIMEOUT", "10")),
+    }
+    statement_timeout = os.getenv("MLB_DB_STATEMENT_TIMEOUT", "").strip()
+    if statement_timeout:
+        # Applied at connect time, so it covers every statement on the session
+        # — including the ones pandas.read_sql issues.
+        args["options"] = f"-c statement_timeout={statement_timeout}"
+    return args
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     url = URL.create(
@@ -50,5 +82,5 @@ def get_engine() -> Engine:
         url,
         pool_pre_ping=True,
         pool_recycle=1800,
-        connect_args={"sslmode": "require"},
+        connect_args=_connect_args(),
     )

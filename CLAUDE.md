@@ -121,10 +121,17 @@ Ads render only through `components/AdSlot.tsx`, whose frame heights are
 reserved in CSS (`.ad-frame`) so ads can never shift page content; the privacy
 policy lives at `/privacy` and is translated like everything else.
 
+DB timeouts (`core/db.py`): `connect_timeout` is always on (10s). A
+`statement_timeout` ceiling is **opt-in via `MLB_DB_STATEMENT_TIMEOUT`** and is
+set only on the API task (30s, matching CloudFront's `origin_read_timeout`) —
+never default it, because the pipeline legitimately runs multi-minute
+statements and a blanket ceiling would kill a feature build mid-run.
+
 ```powershell
 .venv\Scripts\uvicorn api.main:app --port 8000   # local API (model-free by design)
 cd web; npm run dev                              # local frontend on :3000
 .venv\Scripts\python scripts\test_api_cache.py   # public-API read cache (no DB needed)
+.venv\Scripts\python scripts\test_db_guardrails.py  # connect/statement timeouts
 .venv\Scripts\python visualization\site_traffic.py   # local-only traffic dashboard on :8050
 ```
 

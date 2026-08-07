@@ -133,6 +133,19 @@ resource "aws_ecs_task_definition" "api" {
       { name = "MLB_DB_USER", value = var.db_username },
       { name = "MLB_DB_SECRET_ARN", value = aws_db_instance.main.master_user_secret[0].secret_arn },
       { name = "ALLOWED_ORIGINS", value = "https://${var.site_domain},https://www.${var.site_domain}" },
+      # Only the API sets this — the pipeline task deliberately has no ceiling
+      # (feature builds and walk-forward pulls run for minutes). Without it,
+      # one runaway query pins a slot in a 5-connection pool on a
+      # single-worker process.
+      #
+      # 30s is not arbitrary: it matches origin_read_timeout on the CloudFront
+      # distribution (infra/api_cdn.tf), so the database abandons a statement
+      # at the same moment the CDN stops waiting for it, instead of burning a
+      # pool slot producing a response nobody will receive. The slowest
+      # legitimate statement measured 2.6s — /api/performance at its 365-day
+      # max, which fetches ~124k un-deduplicated prediction rows and backs the
+      # /performance page — so this clips nothing real.
+      { name = "MLB_DB_STATEMENT_TIMEOUT", value = "30s" },
     ]
     logConfiguration = {
       logDriver = "awslogs"

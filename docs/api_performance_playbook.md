@@ -568,8 +568,28 @@ free instead of a second full refetch, and it is exactly what a CloudFront
 distribution would need if item 6 ships later. Deliberately *shorter* than the
 server TTLs — the browser cache is the one you can't flush.
 
-No Terraform changed. Task sizing, indexes, and CloudFront were offered but
-not taken in this pass.
+No Terraform changed *in this pass*. CloudFront and the DB timeout guardrails
+shipped later (below); task sizing and the read-path indexes were declined —
+see the closing section for why.
+
+**Timeout guardrails** (item 11), added once the queries were fast enough that
+a slow one meant something was wrong. Two lessons generalise:
+
+*The default is the dangerous part.* One `get_engine()` serves a read-only API
+and a batch pipeline whose tolerable query lengths differ by three orders of
+magnitude. A `statement_timeout` that looked sensible for the API would kill a
+feature build mid-run. So `connect_timeout` is always on (a hung connect should
+never hold a pool slot), and `statement_timeout` is **opt-in via an env var**,
+set only on the API task. `scripts/test_db_guardrails.py` asserts *both*
+directions — that the ceiling fires when set, and that nothing is imposed when
+it isn't, because the silent-breakage direction is the one a smoke test misses.
+
+*Pick the value from a boundary that already exists, not a round number.* The
+API's ceiling is 30s because that is CloudFront's `origin_read_timeout`: past
+it, the database would be burning a pool slot producing a response the CDN has
+already stopped waiting for. Measure the slowest legitimate statement first —
+here 2.6s, `/api/performance` at its 365-day max, which fetches ~124k
+un-deduplicated prediction rows — so you know the ceiling clips nothing real.
 
 ### Verification
 

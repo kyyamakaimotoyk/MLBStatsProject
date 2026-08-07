@@ -21,6 +21,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
@@ -110,11 +111,18 @@ def test_matches_base_tables(days: int) -> None:
     merged = truth.merge(stored, on="game_pk", suffixes=("_base", "_roll"))
     for col in ("correct", "margin_err", "p_home", "market_p_home"):
         b, r = merged[f"{col}_base"], merged[f"{col}_roll"]
-        if col in ("correct",):
+        if col == "correct":
             bad = int((b.fillna(-1) != r.fillna(-1)).sum())
         else:
-            # both sides NaN counts as agreement
-            bad = int(((b - r).abs() > 1e-6).fillna(b.notna() != r.notna()).sum())
+            # Relative, not absolute. margin_err and p_home are REAL (float4),
+            # so a value round-tripped through Python can land one ULP away —
+            # ~1.9e-6 at a margin error of 20. A flat 1e-6 tolerance asserts
+            # more precision than the column can physically hold and flags
+            # that as a failure. rtol catches a real drift (a changed
+            # prediction moves these by ~1e-1) while ignoring representation
+            # noise. equal_nan: a game with no line has NaN on both sides.
+            bad = int((~np.isclose(b.astype(float), r.astype(float),
+                                   rtol=1e-6, atol=1e-6, equal_nan=True)).sum())
         check(f"{col} matches for every game", bad == 0, f"{bad} mismatched")
 
     tb = pd.read_sql(text(TRUTH_BATTER_DAYS), engine, params={"days": days})

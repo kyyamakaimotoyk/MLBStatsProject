@@ -30,10 +30,19 @@ from sqlalchemy import text
 
 from core.db import get_engine
 from core.market import no_vig_sql, with_market
+from core.tiers import STRONG_MIN
 
 log = logging.getLogger(__name__)
 
 PRIMARY = "lgbm_runs"
+
+# Calibrated-probability source for tiering HISTORICAL rows. daily_v1 rows
+# already store the served calibrated p_home; walk-forward backfill rows store
+# the raw sigma-squash p, so their tier comes from the E11c offline archive
+# instead. Update alongside daily.py's CAL_P_ARCHIVE when a newer archive
+# ships, then rebuild with --full.
+TIER_CAL_TYPE = "lgbm_runs+log8"
+TIER_CAL_VERSION = "v20260716_083741"
 
 # Finals arrive on the even-hour score refreshes and predictions upsert at
 # 18/21/23, so a game's grade can still move a day or two after game_date
@@ -54,6 +63,17 @@ _GAME_ROWS = f"""
            (g.home_score > g.away_score) AS home_won,
            (CASE WHEN p.p_home >= 0.5 THEN g.home_score > g.away_score
                  ELSE g.home_score < g.away_score END) AS correct,
+           -- Strong/Lean: the calibrated probability OF THE PICK vs the
+           -- frozen threshold. daily_v1 p_home is already the served
+           -- calibrated probability; historical rows use the E11c archive's
+           -- calibrated p on the published pick's side (cal missing -> the
+           -- row's own p, the honest fallback for games outside the archive).
+           (CASE WHEN (
+               CASE WHEN p.model_version = 'daily_v1' OR cal.cal_p IS NULL
+                    THEN GREATEST(p.p_home, 1 - p.p_home)
+                    WHEN p.p_home >= 0.5 THEN cal.cal_p
+                    ELSE 1 - cal.cal_p END
+            ) >= :strong_min THEN 'strong' ELSE 'lean' END) AS tier,
            abs(g.home_score - g.away_score - p.pred_margin) AS margin_err,
            abs(g.home_score + g.away_score - p.pred_total) AS total_err,
            c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
@@ -67,6 +87,12 @@ _GAME_ROWS = f"""
         ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
         LIMIT 1
     ) p ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT cp.p_home AS cal_p FROM model_predictions cp
+        WHERE cp.game_pk = g.game_pk
+          AND cp.model_type = :cal_type AND cp.model_version = :cal_ver
+        LIMIT 1
+    ) cal ON TRUE
     LEFT JOIN LATERAL (
         SELECT * FROM odds_lines o
         WHERE o.game_pk = g.game_pk AND o.is_closing
@@ -85,12 +111,12 @@ _GAME_ROWS = f"""
 _UPSERT_GAME = """
     INSERT INTO pred_grades (
         game_pk, game_date, model_type, model_version, p_home, pred_margin,
-        pred_total, margin, total, home_won, correct, margin_err, total_err,
-        market_p_home, market_total, refreshed_at)
+        pred_total, margin, total, home_won, correct, tier, margin_err,
+        total_err, market_p_home, market_total, refreshed_at)
     VALUES (
         :game_pk, :game_date, :model_type, :model_version, :p_home,
         :pred_margin, :pred_total, :margin, :total, :home_won, :correct,
-        :margin_err, :total_err, :market_p_home, :market_total, now())
+        :tier, :margin_err, :total_err, :market_p_home, :market_total, now())
     ON CONFLICT (game_pk) DO UPDATE SET
         game_date = EXCLUDED.game_date,
         model_type = EXCLUDED.model_type,
@@ -102,6 +128,7 @@ _UPSERT_GAME = """
         total = EXCLUDED.total,
         home_won = EXCLUDED.home_won,
         correct = EXCLUDED.correct,
+        tier = EXCLUDED.tier,
         margin_err = EXCLUDED.margin_err,
         total_err = EXCLUDED.total_err,
         market_p_home = EXCLUDED.market_p_home,
@@ -252,7 +279,11 @@ def refresh(days: int = DEFAULT_DAYS, full: bool = False) -> dict[str, int]:
         since = conn.execute(text(f"SELECT {since_sql} AS d")).scalar()
         log.info("refreshing grade rollups from %s%s", since, " (full)" if full else "")
 
-        raw = pd.read_sql(text(_GAME_ROWS), conn, params={"m": PRIMARY, "since": since})
+        raw = pd.read_sql(text(_GAME_ROWS), conn,
+                          params={"m": PRIMARY, "since": since,
+                                  "cal_type": TIER_CAL_TYPE,
+                                  "cal_ver": TIER_CAL_VERSION,
+                                  "strong_min": STRONG_MIN})
         conn.execute(text("DELETE FROM pred_grades WHERE game_date >= :since"),
                      {"since": since})
         if not raw.empty:

@@ -145,7 +145,12 @@ every `--scores-only` tick; the API only ever does an indexed range scan.
 Two grains, and they are not interchangeable:
 - `pred_grades` / `batter_grades_daily` resolve "which of the ~81 append-only
   prediction rows per game is the published one" once, on write. This is what
-  the public track record (`/api/public/*`) reads.
+  the public track record (`/api/public/*`) reads. `pred_grades.tier` is the
+  published Strong/Lean pick tier — the frozen rule lives in `core/tiers.py`
+  (calibrated pick probability ≥ .58; historical rows tier via the E11c
+  archive constants in `orchestration/grades.py`). The site leads with the
+  strong record, so changing the rule or the archive constants is a product
+  change: tuning-log entry, `grades --full` rebuild, site copy reviewed.
 - `model_perf_daily` / `batter_perf_daily` keep every `(model_type,
   model_version)` **apart**, per day, because `/api/performance` exists to
   compare model variants — collapsing to the published row would erase the

@@ -6,7 +6,13 @@ import { getJSON } from "@/lib/api";
 import { BatterDay, marketComparison, ResultRow } from "@/lib/perf";
 import { pctLabel } from "@/lib/copy";
 import { useLang } from "@/lib/i18n";
-import { PicksStrip, ProofChip, WindowSelect } from "@/components/shared";
+import {
+  PicksStrip,
+  ProofChip,
+  TierKey,
+  TierSelect,
+  WindowSelect,
+} from "@/components/shared";
 import AdSlot from "@/components/AdSlot";
 import { daysBack, sinceDate, WindowKey } from "@/lib/windows";
 import {
@@ -27,6 +33,7 @@ export default function RecordPage() {
   const [rows, setRows] = useState<ResultRow[] | null>(null);
   const [batterDays, setBatterDays] = useState<BatterDay[] | null>(null);
   const [win, setWin] = useState<WindowKey>("2m");
+  const [tier, setTier] = useState<TierKey>("all");
 
   useEffect(() => {
     getSummary().then(setSummary).catch(() => {});
@@ -57,10 +64,19 @@ export default function RecordPage() {
   const gradedGames = (feed?.days ?? [])
     .flatMap((d) => d.games)
     .filter((g) => g.correct != null)
+    .filter((g) => tier === "all" || g.tier === tier)
     .reverse();
 
   const since = sinceDate(win);
   const view = (rows ?? []).filter((r) => r.game_date >= since);
+  // The chip grid always summarizes the whole window (with the strong slice
+  // called out beside the pooled number); the tier filter drives everything
+  // below it — market comparison, charts, and the pick-by-pick strip.
+  const tierView = tier === "all" ? view : view.filter((r) => r.tier === tier);
+  const strongRows = view.filter((r) => r.tier === "strong");
+  const strongCorrect = strongRows.filter(
+    (r) => (r.p_home >= 0.5) === r.home_won,
+  ).length;
   const correct = view.filter((r) => (r.p_home >= 0.5) === r.home_won).length;
   const marginMiss = view.length
     ? view.reduce((s, r) => s + Math.abs(r.pred_margin - r.margin), 0) / view.length
@@ -70,7 +86,7 @@ export default function RecordPage() {
     ? totalMiss.reduce((s, r) => s + Math.abs((r.pred_total ?? 0) - (r.total ?? 0)), 0) /
       totalMiss.length
     : null;
-  const market = marketComparison(view);
+  const market = marketComparison(tierView);
   const batterView = (batterDays ?? []).filter((d) => d.game_date >= since);
   const batterCalls = batterView.reduce((s, d) => s + d.n, 0);
 
@@ -81,11 +97,24 @@ export default function RecordPage() {
           <h1 className="text-2xl font-bold">{t.record.title}</h1>
           <p className="mt-1 text-zinc-600 dark:text-zinc-400">{t.record.subtitle}</p>
         </div>
-        <WindowSelect value={win} onChange={setWin} />
+        <div className="flex flex-wrap items-center gap-3">
+          <TierSelect value={tier} onChange={setTier} />
+          <WindowSelect value={win} onChange={setWin} />
+        </div>
       </div>
 
       {view.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {strongRows.length > 0 && (
+            <ProofChip
+              metric={pctLabel(strongCorrect / strongRows.length)}
+              line1={t.record.strongWinnersCalled}
+              line2={t.record.strongOf(
+                strongRows.length.toLocaleString(),
+                view.length.toLocaleString(),
+              )}
+            />
+          )}
           <ProofChip
             metric={pctLabel(correct / view.length)}
             line1={t.record.winnersCalled}
@@ -117,6 +146,9 @@ export default function RecordPage() {
             }
           />
         </div>
+      )}
+      {strongRows.length > 0 && (
+        <p className="text-sm text-zinc-500">{t.record.tierBlurb}</p>
       )}
       {!rows && <p className="text-sm text-zinc-500">{t.common.loading}</p>}
       {rows && view.length === 0 && (
@@ -158,13 +190,13 @@ export default function RecordPage() {
                 />
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
-                <SkillCurveChart rows={view} />
-                <TotalSkillCurveChart rows={view} />
+                <SkillCurveChart rows={tierView} />
+                <TotalSkillCurveChart rows={tierView} />
               </div>
               <p className="text-xs text-zinc-400">
                 {t.record.linesCover(
                   market.n.toLocaleString(),
-                  view.length.toLocaleString(),
+                  tierView.length.toLocaleString(),
                 )}
               </p>
             </>
@@ -205,18 +237,18 @@ export default function RecordPage() {
 
       <AdSlot placement="recordMid" />
 
-      {view.length > 100 && (
+      {tierView.length > 100 && (
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">{t.record.underHoodTitle}</h2>
           <div className="grid gap-4 lg:grid-cols-2">
-            <ConfidenceCurveChart rows={view} />
-            <RocChart rows={view} />
-            <MarginMissChart rows={view} />
-            <ConfusionMatrix rows={view} />
+            <ConfidenceCurveChart rows={tierView} />
+            <RocChart rows={tierView} />
+            <MarginMissChart rows={tierView} />
+            <ConfusionMatrix rows={tierView} />
           </div>
         </section>
       )}
-      {view.length > 0 && view.length <= 100 && (
+      {view.length > 0 && tierView.length <= 100 && (
         <p className="text-xs text-zinc-400">{t.record.chartsAppear}</p>
       )}
 

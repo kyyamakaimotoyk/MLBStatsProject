@@ -77,6 +77,18 @@ export default function HomePage() {
         </div>
         {summary && (
           <div className="mx-auto flex max-w-2xl flex-wrap justify-center gap-3 pt-2">
+            {summary.strong_pct != null && (
+              <ProofChip
+                metric={pctLabel(summary.strong_pct)}
+                line1={t.proof.strongWinners(
+                  t.proof.sinceYear(summary.since.slice(0, 4)),
+                )}
+                line2={t.proof.strongSub(
+                  (summary.strong_graded ?? 0).toLocaleString(),
+                  summary.games_graded.toLocaleString(),
+                )}
+              />
+            )}
             <ProofChip
               metric={pctLabel(
                 summary.last30_wins / Math.max(summary.last30_wins + summary.last30_losses, 1),

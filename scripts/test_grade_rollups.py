@@ -28,16 +28,29 @@ from sqlalchemy import text
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.db import get_engine  # noqa: E402
 from core.market import no_vig, no_vig_sql, with_market  # noqa: E402
+from core.tiers import STRONG_MIN  # noqa: E402
 from orchestration import grades  # noqa: E402
 
 FAILURES: list[str] = []
 
 # The grading computed straight from the base tables — deliberately written
 # the long way, so this test fails if grades.py's resolution rule drifts.
+# The tier truth is spelled out independently too: served (daily_v1) rows tier
+# on their own calibrated p_home; historical rows tier on the E11c archive's
+# calibrated probability taken on the published pick's side.
 TRUTH_GAMES = f"""
     SELECT g.game_pk, g.game_date,
            (CASE WHEN p.p_home >= 0.5 THEN g.home_score > g.away_score
                  ELSE g.home_score < g.away_score END) AS correct,
+           (CASE WHEN (
+               CASE
+                   WHEN p.model_version = 'daily_v1' OR cal.cal_p IS NULL THEN
+                       CASE WHEN p.p_home >= 0.5 THEN p.p_home
+                            ELSE 1 - p.p_home END
+                   WHEN p.p_home >= 0.5 THEN cal.cal_p
+                   ELSE 1 - cal.cal_p
+               END) >= {STRONG_MIN}
+            THEN 'strong' ELSE 'lean' END) AS tier,
            abs(g.home_score - g.away_score - p.pred_margin) AS margin_err,
            p.p_home,
            c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
@@ -50,6 +63,13 @@ TRUTH_GAMES = f"""
         WHERE p.game_pk = g.game_pk AND p.model_type = 'lgbm_runs'
         ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC LIMIT 1
     ) p ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT cp.p_home AS cal_p FROM model_predictions cp
+        WHERE cp.game_pk = g.game_pk
+          AND cp.model_type = '{grades.TIER_CAL_TYPE}'
+          AND cp.model_version = '{grades.TIER_CAL_VERSION}'
+        LIMIT 1
+    ) cal ON TRUE
     LEFT JOIN LATERAL (
         SELECT * FROM odds_lines o
         WHERE o.game_pk = g.game_pk AND o.is_closing
@@ -100,7 +120,8 @@ def test_matches_base_tables(days: int) -> None:
     engine = get_engine()
     truth = with_market(pd.read_sql(text(TRUTH_GAMES), engine, params={"days": days}))
     stored = pd.read_sql(text(f"""
-        SELECT game_pk, game_date, correct, margin_err, p_home, market_p_home
+        SELECT game_pk, game_date, correct, tier, margin_err, p_home,
+               market_p_home
         FROM pred_grades WHERE game_date >= {grades.ET_TODAY} - :days
     """), engine, params={"days": days})
 
@@ -109,9 +130,9 @@ def test_matches_base_tables(days: int) -> None:
           f"base={len(truth)} rollup={len(stored)}")
 
     merged = truth.merge(stored, on="game_pk", suffixes=("_base", "_roll"))
-    for col in ("correct", "margin_err", "p_home", "market_p_home"):
+    for col in ("correct", "tier", "margin_err", "p_home", "market_p_home"):
         b, r = merged[f"{col}_base"], merged[f"{col}_roll"]
-        if col == "correct":
+        if col in ("correct", "tier"):
             bad = int((b.fillna(-1) != r.fillna(-1)).sum())
         else:
             # Relative, not absolute. margin_err and p_home are REAL (float4),
@@ -257,7 +278,8 @@ def test_incremental_equals_full(days: int) -> None:
     # row shuffling rather than on any change in the data.
     queries = {
         "pred_grades":
-            "SELECT game_pk, correct, margin_err, market_p_home FROM pred_grades "
+            "SELECT game_pk, correct, tier, margin_err, market_p_home "
+            "FROM pred_grades "
             f"WHERE game_date >= {grades.ET_TODAY} - :days ORDER BY game_pk",
         "batter_grades_daily":
             "SELECT game_date, n, model_correct, hr_watch_hits "

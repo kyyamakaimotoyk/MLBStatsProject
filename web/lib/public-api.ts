@@ -23,6 +23,10 @@ export type FeedGame = {
   pick: string;
   pick_chance: number;
   correct: boolean | null;
+  // Strong = the calibrated win chance of the pick itself is >= 58% (the
+  // frozen core/tiers.py rule). Optional so the page degrades to no badge
+  // if the API hasn't been redeployed with it yet.
+  tier?: "strong" | "lean";
   // player_id is optional so the page degrades to plain text if the API
   // hasn't been redeployed with it yet.
   watch: { player_id?: number; name: string; p_hr: number; exp_h: number; p_hit: number }[];
@@ -35,6 +39,12 @@ export type Summary = {
   winners_pct: number;
   last30_wins: number;
   last30_losses: number;
+  // The strong-tier record (all time + last 30). Optional so the hero
+  // degrades to the pooled chips until the API ships the fields.
+  strong_graded?: number;
+  strong_pct?: number | null;
+  strong_last30_wins?: number;
+  strong_last30_losses?: number;
   avg_score_error: number;
   avg_total_error: number;
   batter_calls_graded: number;

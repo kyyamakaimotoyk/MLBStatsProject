@@ -11,6 +11,8 @@
 //   market favorite          → 市場の本命 / pregame・closing line → 試合前のライン・最終ライン
 //   betting                  → 賭け（ベッティングとしない）
 //   coin flip / even         → 五分五分・互角（コイン投げ・コイントスと直訳しない）
+//   strong pick              → 有力予測（確信度の高い予測。「ストロング」と音写しない）
+//   lean pick                → 参考予測（有力以外のすべての予測）
 //   probable pitcher         → 予告先発
 //   gets a hit               → ヒットを打つ／安打（ゲットヒットとしない）
 //   homer                    → 本塁打
@@ -77,10 +79,14 @@ const en = {
     result: "Result",
     coinFlip: "coin flip",
     even: "even",
+    strong: "strong",
   },
 
   proof: {
     winners: (window: string) => `winners called, ${window}`,
+    strongWinners: (window: string) => `strong picks called right, ${window}`,
+    strongSub: (n: string, total: string) =>
+      `our most confident slice — ${n} of ${total} graded picks`,
     scoreMiss: (window: string) => `average score miss, ${window}`,
     logged: "predictions logged",
     loggedSub: "and publicly scored",
@@ -139,6 +145,17 @@ const en = {
     hitterCallsRight: "hitter calls right",
     hitterCallsSub: (n: string) => `"gets a hit tonight?" — ${n} graded, all time`,
     noGraded: "No graded games in this window yet.",
+
+    strongWinnersCalled: "strong picks called right",
+    strongOf: (n: string, total: string) =>
+      `${n} of ${total} graded games in this window`,
+    tiers: {
+      all: "All picks",
+      strong: "Strong picks",
+      lean: "Lean picks",
+    } as Record<"all" | "strong" | "lean", string>,
+    tierBlurb:
+      "Strong picks are a slice of the whole record — the roughly one-third of games where the model's calibrated win chance for its own pick reaches 58% or higher. They are our strongest predictions; every other game is a Lean pick. Nothing is dropped: every game is still predicted and graded, and the filter above lets you view each chart below for one tier at a time.",
 
     marketTitle: "The model vs the market",
     marketSub:
@@ -577,10 +594,14 @@ const ja: Dict = {
     result: "結果",
     coinFlip: "五分五分",
     even: "互角",
+    strong: "有力",
   },
 
   proof: {
     winners: (window: string) => `勝敗的中率（${window}）`,
+    strongWinners: (window: string) => `有力予測の的中率（${window}）`,
+    strongSub: (n: string, total: string) =>
+      `最も自信のある予測 — 採点済み${total}件のうち${n}件`,
     scoreMiss: (window: string) => `平均スコア誤差（${window}）`,
     logged: "これまでの予測数",
     loggedSub: "（全件を公開・採点）",
@@ -639,6 +660,17 @@ const ja: Dict = {
     hitterCallsRight: "打者予測の的中率",
     hitterCallsSub: (n: string) => `「今夜ヒットを打つか？」— 全期間で${n}件を採点`,
     noGraded: "この期間には、採点済みの試合がまだありません。",
+
+    strongWinnersCalled: "有力予測の的中率",
+    strongOf: (n: string, total: string) =>
+      `この期間の採点済み${total}試合のうち${n}試合`,
+    tiers: {
+      all: "すべての予測",
+      strong: "有力予測",
+      lean: "参考予測",
+    } as Record<"all" | "strong" | "lean", string>,
+    tierBlurb:
+      "有力予測とは、モデルが自らの予測に58%以上の較正済み勝率を与えた試合だけを切り出したもので、全体のおよそ3分の1にあたる、最も自信のある予測です。それ以外の試合は参考予測です。除外される試合は一つもなく、すべての試合を変わらず予測・採点しています。上のフィルターで、下の各グラフを予測の種類ごとに切り替えてご覧いただけます。",
 
     marketTitle: "モデルと市場の比較",
     marketSub:

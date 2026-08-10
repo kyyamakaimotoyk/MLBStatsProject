@@ -15,6 +15,7 @@ from sqlalchemy import text
 from api.cache import cached
 from core.db import get_engine
 from core.market import with_market as _with_market
+from core.tiers import STRONG_MIN, TIER_LEAN, TIER_STRONG
 
 router = APIRouter()
 
@@ -45,6 +46,7 @@ def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
                at.abbrev AS away, at.name AS away_name,
                g.home_score, g.away_score,
                p.p_home, p.pred_home_runs, p.pred_away_runs, p.pred_total,
+               pg.tier AS graded_tier,
                c.ml_home AS close_ml_home, c.ml_away AS close_ml_away,
                c.total AS close_total,
                op.ml_home AS open_ml_home, op.ml_away AS open_ml_away,
@@ -56,6 +58,7 @@ def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
             ORDER BY (p.model_version = 'daily_v1') DESC, p.created_at DESC
             LIMIT 1
         ) p ON TRUE
+        LEFT JOIN pred_grades pg ON pg.game_pk = g.game_pk
         JOIN teams ht ON ht.team_id = g.home_team_id
         JOIN teams at ON at.team_id = g.away_team_id
         LEFT JOIN LATERAL (
@@ -79,6 +82,13 @@ def _graded_games(days: int, include_today: bool = True) -> pd.DataFrame:
     df = _with_market(df)
     df["pick"] = np.where(df["p_home"] >= 0.5, df["home"], df["away"])
     df["pick_chance"] = np.where(df["p_home"] >= 0.5, df["p_home"], 1 - df["p_home"])
+    # Graded games carry the tier the pipeline baked into pred_grades; games
+    # not yet graded (tonight's slate) derive it from the served calibrated
+    # probability — the same rule, core/tiers.py::STRONG_MIN.
+    df["tier"] = df["graded_tier"].where(
+        df["graded_tier"].notna(),
+        np.where(df["pick_chance"] >= STRONG_MIN, TIER_STRONG, TIER_LEAN))
+    df = df.drop(columns=["graded_tier"])
     winner = np.where(df["home_score"] > df["away_score"], df["home"], df["away"])
     df["correct"] = np.where(df["is_final"], df["pick"] == winner, None)
     return df
@@ -107,7 +117,18 @@ def summary():
                                                    FROM pred_grades) - 30) AS last30_wins,
                count(*) FILTER (
                    WHERE NOT correct AND game_date >= (SELECT max(game_date)
-                                                       FROM pred_grades) - 30) AS last30_losses
+                                                       FROM pred_grades) - 30) AS last30_losses,
+               count(*) FILTER (WHERE tier = 'strong')     AS strong_graded,
+               (avg(correct::int) FILTER (WHERE tier = 'strong')
+                   )::double precision                     AS strong_pct,
+               count(*) FILTER (
+                   WHERE tier = 'strong' AND correct
+                     AND game_date >= (SELECT max(game_date)
+                                       FROM pred_grades) - 30) AS strong_last30_wins,
+               count(*) FILTER (
+                   WHERE tier = 'strong' AND NOT correct
+                     AND game_date >= (SELECT max(game_date)
+                                       FROM pred_grades) - 30) AS strong_last30_losses
         FROM pred_grades
     """), engine)
     if rec.empty or not rec["games_graded"].iloc[0]:
@@ -124,6 +145,11 @@ def summary():
         "winners_pct": float(r["winners_pct"]),
         "last30_wins": int(r["last30_wins"]),
         "last30_losses": int(r["last30_losses"]),
+        "strong_graded": int(r["strong_graded"]),
+        "strong_pct": (float(r["strong_pct"])
+                       if pd.notna(r["strong_pct"]) else None),
+        "strong_last30_wins": int(r["strong_last30_wins"]),
+        "strong_last30_losses": int(r["strong_last30_losses"]),
         "avg_score_error": float(r["avg_score_error"]),
         "avg_total_error": float(r["avg_total_error"]),
         "batter_calls_graded": calls,
@@ -374,7 +400,7 @@ def results(days: int = Query(120, le=2000)):
     1400-day default shipped ~1.7 MB to draw a 30-day chart."""
     df = pd.read_sql(text(f"""
         SELECT game_date::text AS game_date, p_home, pred_margin, pred_total,
-               margin, total, home_won, market_p_home, market_total
+               margin, total, home_won, tier, market_p_home, market_total
         FROM pred_grades
         WHERE game_date >= {ET_TODAY} - :days
         ORDER BY game_date, game_pk

@@ -29,6 +29,52 @@ export function WindowSelect({
   );
 }
 
+export type TierKey = "all" | "strong" | "lean";
+
+const TIER_KEYS: TierKey[] = ["all", "strong", "lean"];
+
+export function TierSelect({
+  value,
+  onChange,
+}: {
+  value: TierKey;
+  onChange: (k: TierKey) => void;
+}) {
+  const { t } = useLang();
+  return (
+    <div className="flex items-center gap-1 text-xs" role="group">
+      {TIER_KEYS.map((k) => (
+        <button
+          key={k}
+          type="button"
+          aria-pressed={value === k}
+          onClick={() => onChange(k)}
+          className={
+            value === k
+              ? "rounded border border-[var(--accent-mark)] px-1.5 py-0.5 font-semibold"
+              : "rounded border border-transparent px-1.5 py-0.5 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          }
+          style={value === k ? { color: "var(--accent-text)" } : undefined}
+        >
+          {t.record.tiers[k]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function StrongBadge() {
+  const { t } = useLang();
+  return (
+    <span
+      className="ml-2 rounded border border-[var(--accent-mark)] px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+      style={{ color: "var(--accent-text)" }}
+    >
+      {t.table.strong}
+    </span>
+  );
+}
+
 export function ProofChip({
   metric,
   line1,
@@ -101,6 +147,7 @@ export function PicksTable({ games }: { games: FeedGame[] }) {
                 <span className="font-semibold" style={{ color: "var(--accent-text)" }}>
                   {g.pick}
                 </span>
+                {g.tier === "strong" && <StrongBadge />}
                 {g.pick_chance <= 0.55 && (
                   <span className="ml-2 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
                     {t.table.coinFlip}

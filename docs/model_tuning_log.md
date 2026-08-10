@@ -1006,3 +1006,55 @@ the case for a dedicated SP-fatigue decomposition (velo-only vs K-only dev,
 or a workload-conditioned form index) — pre-register it against dev_l3
 full, not against base. Stored: batter preds e16b_pit / e16b_bat (registry
 rows kept).
+
+---
+
+## T1 — 2026-08-10 — Strong/Lean pick tiers: display-layer rule frozen and shipped
+
+Not a model change — no feature, head, or pick changed. This freezes a
+published PRESENTATION rule over the existing archive, after the 2026-08
+gap analysis concluded a confidence-filtered surface is the only honest
+route to a 60%+ headline (every external all-games claim ≥60% audited as
+leakage or protocol artifact; market favorite .5685 on our paired sample).
+
+**Rule (core/tiers.py, the single source).** A pick is **strong** when the
+calibrated probability of the pick itself — max(p, 1−p) of the served
+E11c p_home — is ≥ **0.58**; otherwise **lean**. Pick-side (not |p−.5|)
+so a flip-zone game whose calibrated p contradicts the margin pick can
+never tier as strong (8 such games in the archive; coin-toss record).
+
+**Measurement (scripts/confidence_tier_study.py, over the 8,713-game
+archive @v20260716_083741, cal p from lgbm_runs+log8).** Pooled .5612;
+pick-prob≥.58 tier: **.6169** [Wilson .5991–.6343], coverage 33.6%
+(~5 picks/day), per-season .6072/.6233/.6253/.6119 — every season ≥ .60
+including drift-year 2026, Mar–Jun .6194 (the tier holds inside the
+market-gap window). Calibration honest in the tail (exp .6253 vs realized
+.6169; top decile exp .6708 vs .6651 — the feared E11a-era top-decile
+overconfidence did not materialize). Elo/lgbm agreement adds ~nothing on
+top (.6198 on nearly the same games) — the calibrator already embeds the
+elo logit; one signal, one rule. Verified via an independent SQL path;
+sanity anchors reproduced (pooled .5612 exact; flip share .1482
+post-pass-through = the documented 14.9%; E8c's ~.80 agree share matches
+the elo margin-sign definition).
+
+**Shipped.** migrations/0017 tier column on pred_grades;
+orchestration/grades.py resolves tier on write (daily_v1 rows from their
+own served p_home; historical rows from the E11c archive via
+TIER_CAL_TYPE/VERSION — update alongside daily.py's CAL_P_ARCHIVE and
+rebuild --full when a newer archive ships); /api/public summary + results
++ feed carry the tier; site leads with the strong record (hero + record
+page), every record chart is tier-filterable, Strong badge on picks, and
+an explanation blurb states the tier is a slice of the full graded record
+(EN/JA). test_grade_rollups.py verifies tier against an independent truth
+query and refresh-stability. Rebuilt --full: strong 3,026/9,045 at
+**.6170** (live daily_v1 slice independently: strong .6211 n=95, lean
+.4768 n=237).
+
+**Caveats (standing).** The .58 cut was chosen by inspecting the archive
+sweep — mitigated by monotonicity (every cut ≥ .58 clears .60 in every
+season) and by the rule being calibration-anchored, but the tier's
+forward record is the real confirm: treat 2026 H2+ live grading as the
+pre-registered confirmation window before any marketing claim stronger
+than the graded numbers themselves. The serving calibrator remains frozen
+to the 2026-07-16 archive (hygiene item from the gap analysis) — a rolling
+refit keeps live tier assignment faithful to the measured one.

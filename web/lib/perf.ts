@@ -9,6 +9,10 @@ export type ResultRow = {
   margin: number;
   total: number | null;
   home_won: boolean;
+  // Strong/Lean pick tier, resolved by the pipeline (core/tiers.py rule:
+  // calibrated win chance of the pick >= 58%). Optional so charts degrade
+  // if the API hasn't been redeployed with it yet.
+  tier?: "strong" | "lean";
   // The betting market's pregame view, when a line was captured: no-vig
   // closing win probability and the closing total line (benchmarks only,
   // never model inputs).

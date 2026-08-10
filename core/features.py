@@ -108,7 +108,9 @@ _FORM_BASES = {"RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
                "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30",
                "N_PRIOR_GAMES", "REST_DAYS", "GAME_NUM"}
 FAMILIES = ("form", "sp", "bullpen", "lineup", "elo", "park", "weather",
-            "context", "travel", "priors", "defense", "ump_serve")
+            "context", "travel", "priors", "defense", "ump_serve",
+            # per-PA dev-deviation sides (E16b decomposition of shipped dev_l3)
+            "dev_bat", "dev_pit")
 
 
 def _family(col: str) -> str:
@@ -140,6 +142,11 @@ def _family(col: str) -> str:
     # before the weather branch: its UMP_ test would claim these otherwise
     if col.startswith(("UMP_SERVE_", "UMP_ACT_")):
         return "ump_serve"
+    # per-PA columns (batter_pa target), every dev window: E16b drop-one sides
+    if col.startswith("B_DEV_L"):
+        return "dev_bat"
+    if col.startswith("P_DEV_L"):
+        return "dev_pit"
     if col in ("TEMP_F", "WIND_SPEED_MPH", "IS_OPEN_AIR") or \
             col.startswith(("WIND_OUT", "UMP_")):
         return "weather"

@@ -956,3 +956,53 @@ metric.
 - Observation (not acted on): UMP_SERVE_KNOWN is ~a series-opener indicator;
   any future context-family experiment should test a clean IS_SERIES_OPENER
   directly rather than inherit it by accident here.
+
+---
+
+## E16b — 2026-08-10 — dev_l3 decomposition: the LL gain is pitcher-side, both sides feed starter-K, nothing changes
+
+The queued E16 follow-up: which side of the shipped per-PA dev_l3 family
+(B_DEV_L3_* batter form vs P_DEV_L3_* pitcher form) carries the log-loss
+gain? E16's circumstantial case said pitcher-side (spK gains, flat
+star-batter MAEs, velo/K form as a fatigue tell).
+
+**Setup.** dev_l3 is production-True, so E16's add-a-flag design inverts:
+drop-one arms against the FULL shipped config, each paired verdict reading
+"what the removed side was worth on top of the other". New per-PA drop-one
+families dev_bat ("B_DEV_L") / dev_pit ("P_DEV_L") in core/features.py;
+--profile passthrough in walkforward_batter (compare arm pinned to the
+default config; guard now compares selections, not flags). Default per-PA
+selection verified identical to the live bundle's 52 features before any
+run. Harness fix shipped with this: league_row.pitcher_means is now built
+over feats ∪ feats_cmp — under a drop-one profile the arm is a SUBSET of
+the default set, and the vs_lg frame previously lacked the compare model's
+columns (KeyError; enable-flags arms never hit this because they are
+supersets). Arms @seed 0, seasons 2023-2026, versions e16b_pit / e16b_bat.
+
+**Result (paired vs full config; selection <=2025 = 559,251 PAs / 130,950
+batter-games; 2026 confirm = 134,294 / 31,593).**
+
+| removed side | per-PA LL sel | starter-K sel | hits sel | LL 2026 | K MAE 2026 |
+|---|---|---|---|---|---|
+| pitcher (no_dev_pit) | +.00034 **p=.0016** | +.0037 **p=.037** | null | +.00046 **p=.013** | **p=.0068 worse** |
+| batter (no_dev_bat) | +.00017 p=.10 | +.0031 **p=.0094** | −.0004 **p<.0001 BETTER** | +.00017 p=.34 | null |
+
+**Reading.** The pitcher side carries the dominant, significant share of the
+shipped LL gain (its removal costs ~the whole E16 full-vs-base delta of
+−.00032) and the harm replicates on the 2026 confirm — E16's fatigue-tell
+hypothesis confirmed. The batter side is mixed: marginal ns LL, a REAL
+starter-K contribution (predicted starter K sums P(K) over the opposing
+nine, so batter K-form feeds it — its removal hurts p=.0094, as strongly as
+removing the pitcher side), and a small hits-MAE harm (the E16 seed-0 hits
+tick, now localized to the batter side).
+
+**Decision.** **No production change** — dev_l3 stays shipped with both
+sides. Trimming to pitcher-only (simpler-ships) is rejected: it trades a
+significant starter-K regression on a headline product surface for a small
+hits-MAE gain on a de-emphasized stat. Single-seed diagnostic (no seed
+spend: nothing ships; the standing per-comparison caveat applies).
+Queued observation for a future cycle: the pitcher-side signal concentrates
+the case for a dedicated SP-fatigue decomposition (velo-only vs K-only dev,
+or a workload-conditioned form index) — pre-register it against dev_l3
+full, not against base. Stored: batter preds e16b_pit / e16b_bat (registry
+rows kept).

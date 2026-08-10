@@ -158,14 +158,20 @@ def _batter_rbi_lookup(events: pd.DataFrame):
 
 def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
         seasons: tuple[int, ...] = TEST_SEASONS,
-        enable_flags: tuple[str, ...] = (), compare_base: bool = False) -> None:
+        enable_flags: tuple[str, ...] = (), profile: str = "full",
+        compare_base: bool = False) -> None:
     comp = bf.build()
     pa = comp["pa"]
-    feats = select_features(list(pa.columns), "batter_pa", enable_flags=enable_flags)
+    feats = select_features(list(pa.columns), "batter_pa",
+                            profile=profile, enable_flags=enable_flags)
+    # the compare arm is always the DEFAULT config (profile full, no forced
+    # flags) — for enable-flags arms that is flags-OFF (E16); for profile
+    # arms it is the shipped set, so the paired verdict reads "what the
+    # removed family was worth" (E16b)
     feats_cmp = select_features(list(pa.columns), "batter_pa")
-    if compare_base and not enable_flags:
-        log.warning("--compare-base without --enable-flags compares identical "
-                    "models; skipping the compare arm")
+    if compare_base and feats == feats_cmp:
+        log.warning("--compare-base with an arm identical to the default "
+                    "config compares identical models; skipping the compare arm")
         compare_base = False
     park = comp["park"]
     sides, actual_sp = _load_game_side_data()
@@ -238,7 +244,11 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                      for g, p in zip(train["game_pk"], train["pitcher_id"])])
         league_row = {
             "q_vs_right": float((train["pitch_hand"] == "R").mean()),
-            "pitcher_means": {c: float(train[c].mean()) for c in feats
+            # union with the compare arm's columns: under a drop-one profile
+            # the arm's feats are a SUBSET of the default set, and the vs_lg
+            # frame must still carry every column the compare model expects
+            "pitcher_means": {c: float(train[c].mean())
+                              for c in dict.fromkeys([*feats, *feats_cmp])
                               if c.startswith("P_")},
             "same_hand_mean": float(train["SAME_HAND"].mean()),
         }
@@ -563,7 +573,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
     # ---- compare-base verdicts: flags-ON vs flags-OFF, selection pool split
     # from the 2026 confirm-only view (E8d hygiene — never select on 2026)
     if compare_base and cmp_pool["ll_on"]:
-        flags_note = "+".join(enable_flags)
+        flags_note = "+".join(enable_flags) or profile
         for title, keep in (("selection pool (<=2025)", lambda s: s <= 2025),
                             ("2026 confirm-only", lambda s: s == 2026)):
             seas = sorted(s for s in cmp_pool["ll_on"] if keep(s))
@@ -575,7 +585,7 @@ def run(seed: int = 0, write_preds: bool = True, version: str = MODEL_VERSION,
                 return np.concatenate(arrs) if arrs else np.array([])
 
             C = {k: _cat(k) for k in cmp_pool}
-            print(f"\n=== [{flags_note}] flags-ON vs flags-OFF -- {title} "
+            print(f"\n=== [{flags_note}] arm vs default config -- {title} "
                   f"({len(C['ll_on'])} PAs, {len(C['h_on'])} batter-games) ===")
             t = ttest_rel(C["ll_on"], C["ll_off"])
             print(f"  per-PA log loss: {C['ll_on'].mean():.5f} vs "
@@ -608,14 +618,18 @@ def main() -> None:
     ap.add_argument("--enable-flags", default="",
                     help="comma list of FEATURE_FLAGS to force ON for this run "
                          "(experiment arms, e.g. dev_l5)")
+    ap.add_argument("--profile", default="full",
+                    help="feature profile, e.g. no_dev_bat / no_dev_pit "
+                         "(E16b drop-one arms against the shipped config)")
     ap.add_argument("--compare-base", action="store_true",
-                    help="also train a flags-OFF model per season for paired "
-                         "ON-vs-OFF verdicts (selection <=2025 and 2026 split)")
+                    help="also train a default-config model per season for "
+                         "paired arm-vs-default verdicts "
+                         "(selection <=2025 and 2026 split)")
     args = ap.parse_args()
     run(seed=args.seed, write_preds=not args.no_preds, version=args.version,
         seasons=tuple(args.seasons),
         enable_flags=tuple(f for f in args.enable_flags.split(",") if f),
-        compare_base=args.compare_base)
+        profile=args.profile, compare_base=args.compare_base)
 
 
 if __name__ == "__main__":

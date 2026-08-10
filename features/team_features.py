@@ -389,6 +389,119 @@ def _ump_factors(max_date) -> dict:
     return out
 
 
+# ---- UMP_SERVE (2026-07 cycle Wave 4): pregame HP-umpire serve path --------
+# Factors are per-HP-ump K/BB rates vs the league over a trailing window, EB-
+# shrunken toward 1.0. Ballasts frozen from scripts/ump_ballast_study.py
+# (2026-08-10, own data 2019+): K YoY r=.093 -> n0=273 (shrunk hard, the crew
+# study's monitoring-convergence result), BB r=.305 -> n0=64 (BB leads).
+UMP_SERVE_WINDOW_DAYS = 1095   # trailing 3 years of factor history
+UMP_SERVE_MIN_GAMES = 15       # window games below which the factor stays 1.0
+UMP_SERVE_BALLAST = {"k": 273.0, "bb": 64.0}
+_UMP_SERVE_NEUTRAL = {"UMP_SERVE_K": 1.0, "UMP_SERVE_BB": 1.0,
+                      "UMP_SERVE_KNOWN": 0, "UMP_ACT_K": 1.0, "UMP_ACT_BB": 1.0}
+
+
+def _ump_serve_lookup(max_date) -> dict:
+    """game_pk -> UMP_SERVE_*/UMP_ACT_* columns (flags 'ump_serve'/'ump_actual').
+
+    Serve columns use the rotation-PREDICTED HP umpire — the previous same-
+    series game's 1B ump (gap 1-3 days; P=.968 on 2019-2026 crews) — because
+    actual assignments post only ~3h pregame (probe study 2026-08). Series
+    openers and DH nightcaps (whose plate ump is outside game 1's crew 99.3%
+    of the time) are unpredictable pregame: neutral 1.0, UMP_SERVE_KNOWN=0.
+    UMP_ACT_* evaluates the same factors for the ACTUAL ump — the diagnostic
+    ceiling, never shippable (it assumes assignment knowledge we only have
+    pregame for ~60% of games). Point-in-time: the predictor uses only the
+    prior game's crew, and factors only games strictly before game_date.
+    """
+    hist_sql = """
+        SELECT g.game_date, o.official_id AS ump_id, bl.k, bl.bb, bl.pa
+        FROM games g
+        JOIN game_officials o
+             ON o.game_pk = g.game_pk AND o.official_type = 'Home Plate'
+        JOIN (SELECT game_pk, SUM(so) AS k, SUM(bb) AS bb, SUM(pa) AS pa
+              FROM batter_game_lines GROUP BY game_pk) bl
+             ON bl.game_pk = g.game_pk
+        WHERE g.is_final AND g.game_type = 'R' AND o.official_id IS NOT NULL
+    """
+    frame_sql = """
+        SELECT g.game_pk, g.game_date, g.home_team_id, g.away_team_id,
+               g.game_number,
+               hp.official_id AS hp_id, fb.official_id AS fb_id
+        FROM games g
+        LEFT JOIN game_officials hp
+             ON hp.game_pk = g.game_pk AND hp.official_type = 'Home Plate'
+        LEFT JOIN game_officials fb
+             ON fb.game_pk = g.game_pk AND fb.official_type = 'First Base'
+    """
+    params = {}
+    if max_date:
+        hist_sql += " AND g.game_date <= :max_date"
+        frame_sql += " WHERE g.game_date <= :max_date"
+        params["max_date"] = max_date
+    hist = pd.read_sql(text(hist_sql), get_engine(), params=params)
+    frame = pd.read_sql(text(frame_sql), get_engine(), params=params)
+    for df in (hist, frame):
+        df["game_date"] = pd.to_datetime(df["game_date"])
+
+    daily = hist.groupby("game_date")[["k", "bb", "pa"]].sum().sort_index()
+    lg_dates = daily.index.to_numpy()
+    lg = {s: np.concatenate([[0.0], daily[s].to_numpy(float).cumsum()])
+          for s in ("k", "bb", "pa")}
+    books = {}
+    for uid, grp in hist.sort_values(["ump_id", "game_date"]).groupby("ump_id"):
+        books[uid] = (grp["game_date"].to_numpy(),
+                      {s: np.concatenate([[0.0], grp[s].to_numpy(float).cumsum()])
+                       for s in ("k", "bb", "pa")})
+    win = np.timedelta64(UMP_SERVE_WINDOW_DAYS, "D")
+
+    def factors(uid, d64):
+        book = books.get(uid)
+        if book is None:
+            return None
+        dates, cums = book
+        hi = int(np.searchsorted(dates, d64, side="left"))
+        lo = int(np.searchsorted(dates, d64 - win, side="left"))
+        n = hi - lo
+        if n < UMP_SERVE_MIN_GAMES:
+            return None
+        lhi = int(np.searchsorted(lg_dates, d64, side="left"))
+        llo = int(np.searchsorted(lg_dates, d64 - win, side="left"))
+        lg_pa = lg["pa"][lhi] - lg["pa"][llo]
+        if lg_pa < 50_000:
+            return None
+        pa = cums["pa"][hi] - cums["pa"][lo]
+        out = {}
+        for s in ("k", "bb"):
+            raw = ((cums[s][hi] - cums[s][lo]) / pa) \
+                / ((lg[s][lhi] - lg[s][llo]) / lg_pa)
+            w = n / (n + UMP_SERVE_BALLAST[s])
+            out[s] = 1.0 + w * (raw - 1.0)
+        return out
+
+    # rotation prediction: previous same-series game's 1B ump. gap 0 =
+    # nightcap (reserve ump, unpredictable); gap > 3 days = new series.
+    frame = frame.sort_values(
+        ["home_team_id", "away_team_id", "game_date", "game_number"])
+    grp = frame.groupby(["home_team_id", "away_team_id"])
+    gap = (frame["game_date"] - grp["game_date"].shift(1)).dt.days
+    frame["pred_id"] = grp["fb_id"].shift(1).where(gap.between(1, 3))
+
+    out = {}
+    for g in frame.itertuples():
+        d64 = g.game_date.to_datetime64()
+        serve = None if pd.isna(g.pred_id) else factors(int(g.pred_id), d64)
+        act = None if pd.isna(g.hp_id) else factors(int(g.hp_id), d64)
+        out[g.game_pk] = {
+            "UMP_SERVE_K": serve["k"] if serve else 1.0,
+            "UMP_SERVE_BB": serve["bb"] if serve else 1.0,
+            "UMP_SERVE_KNOWN": 1 if serve else 0,
+            "UMP_ACT_K": act["k"] if act else 1.0,
+            "UMP_ACT_BB": act["bb"] if act else 1.0,
+        }
+    return out
+
+
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     p1, p2 = np.radians(lat1), np.radians(lat2)
     a = (np.sin((p2 - p1) / 2) ** 2
@@ -949,6 +1062,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
     starts = _load_starts(max_date)
     bullpen = _load_bullpen(max_date)
     ump = _ump_factors(max_date)
+    ump_serve = _ump_serve_lookup(max_date)
     log.info("loaded %d games, %d offense rows, %d starts", len(games), len(offense), len(starts))
 
     # Long frame: one row per team per game, with Statcast offense merged in.
@@ -1005,6 +1119,7 @@ def build_features(max_date: str | None = None, cross_season: bool = False) -> p
             "IS_NIGHT": 1 if g.day_night == "night" else 0,
             "IS_DOUBLEHEADER_G2": 1 if (g.game_number or 1) > 1 else 0,
             "UMP_K_FACTOR": ump.get(g.game_pk, 1.0),
+            **ump_serve.get(g.game_pk, _UMP_SERVE_NEUTRAL),
             "WIND_OUT_MPH": (
                 (1 if "Out" in wd else -1 if "In" in wd else 0)
                 * (0 if pd.isna(g.wind_speed_mph) else g.wind_speed_mph)

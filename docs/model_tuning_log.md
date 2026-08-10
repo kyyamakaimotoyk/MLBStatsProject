@@ -874,3 +874,85 @@ ALL does not beat the best single window head-to-head. L5 ties L3 on LL
   frozen-Elo guard caught it; refresh team_rating and rerun). Windows
   cp932 stdout cannot print em-dashes — harness prints are ASCII-only now;
   runners export PYTHONIOENCODING=utf-8.
+
+---
+
+## E17 — 2026-08-10 — Wave-4 umpire serve path: comprehensive null, the umpire track closes
+
+The probe-gated Wave 4 round (docs/literature_review_2026-07.md; crew study
+docs/umpire_crew_study_2026-07.md). Full record incl. the probe and rotation
+tables: docs/wave4_umpire_serve_2026-08.md.
+
+**Serve-path infrastructure (the round's keepers, independent of the verdict).**
+- Probe fortnight (196 R games, 2026-07-23..08-06): 83.7% of HP assignments
+  post pregame; 164/164 pregame captures matched the final ump (assignments
+  never change once posted); median lead 3.1h, posting wave 20-21Z. At each
+  game's LAST pregame prediction tick, 59.7% of published predictions could
+  carry the actual ump (21Z-last games .966, 23Z .863, day games ~0). A 20Z
+  overwrite tick would add +7.1pp.
+- Pregame rotation predictor: HP(G) = 1B ump of the previous same-series game
+  (gap 1-3 days). Coverage .678, hit .968 (2026: .678/.968; 2020 the one weak
+  year at .863). DH nightcaps get a RESERVE plate ump outside game 1's crew
+  99.3% of the time — never predictable; day-after-a-nightcap still follows
+  1B->HP at .865. Misses are crew substitutions, never "HP stayed HP".
+- Chadwick does NOT bridge umpires: import_reference keeps only rows with
+  mlb_played_first, so career umps never enter players_xref (0/2,475
+  ump-seasons). Factors therefore built from OWN data only (game_officials
+  MLBAM ids x batter_game_lines K/BB/PA, 2019+); Retrosheet stays study-only.
+- Ballasts on own data (scripts/ump_ballast_study.py) replicate the crew
+  study's era collapse: K factor YoY r=.093 -> n0=273 games; BB r=.305 ->
+  n0=64. Trailing 1095d window, min 15 games. Shrunken spreads: BB SD .033,
+  K SD .007 — BB-led by construction.
+
+**Setup.** Inline `_ump_serve_lookup` in features/team_features.py (the
+_ump_factors pattern, max_date-honoring; no new table). Columns
+UMP_SERVE_{K,BB,KNOWN} (flag ump_serve; rotation-predicted ump only, neutral
+1.0 + KNOWN=0 for openers/nightcaps/debuts; KNOWN rate .581) and
+UMP_ACT_{K,BB} (flag ump_actual; actual assignment = the diagnostic ceiling,
+never shippable). `_FLAG_PREFIXES["umpire"]` narrowed ("UMP_",) ->
+("UMP_K_FACTOR",) so the disabled E3 flag cannot silently strip the new
+columns (the cumulative-filter trap); family "ump_serve" added. Snapshot
+v20260810_015624 (flags off; leakage PASS 11,854 x 248; flags-off
+column-identity PASS -> lgbm_runs+8s @v20260716_083741 carries over; the
+carry-over verified bit-identical this time: +ub8 base arm vs +8s = 0
+discordant picks, all paired tests p=1.0). Arms +us8 / +ua8 / +usw8
+(ump_serve,wind_out — the E3/E8b retest) @v20260810_015624; selection
+--seasons 2023,2024,2025 (7,269 paired games), 2026 confirm + ABS
+attenuation guard; totals MAE the pre-registered primary.
+
+**Result — seed-0 selection.**
+
+| arm | totals MAE (primary) | acc | AUC | log loss |
+|---|---|---|---|---|
+| +us8 (serve) | null p=.68 | null p=.79 | +.0035 **p=.028** | -.0011 **p=.038** |
+| +ua8 (ceiling) | null p=.51 | null p=.11 | +.0035 **p=.018** | **p=.036** |
+| +usw8 (E3 retest) | null p=.13 | **.5591 vs .5654 McNemar p=.039 WORSE** | null p=.60 | null p=.63 |
+
+**Why the probability hits do not survive.** (1) Era decay: the pooled gain
+is 2023 alone (AUC p=.038, LL p=.050); 2024 null (p=.24), 2025 null (p=.75),
+2026 holdout SIGN-FLIPPED (LL A .6883 vs B .6873, p=.31) — the ABS
+attenuation guard fires exactly as pre-registered, and the decay replicates
+the crew study's monitoring-convergence trend in-sample. (2) Seed gate:
+s1 all null (LL p=.31), s2 all null with probability deltas sign-flipped —
+the E10 pattern, direction not consistent 0/1/2. Ship bar missed on every
+metric.
+
+**Decision.**
+- **REJECTED: ump_serve, ump_actual, ump_serve+wind_out** — flags stay
+  False; snapshot stays non-current; no production change. Totals MAE null
+  is the FIFTH umpire-family totals failure (E3 x3, E8b, E17).
+- The ceiling arm closes the whole track, not just this predictor: with
+  ~100% assignment knowledge the factors still ship nothing, so no better
+  rotation predictor, probe cadence, or late-tick actuals overwrite can
+  rescue a per-ump K/BB feature. Do not re-propose without a structurally
+  different signal (e.g. B8b pitch-call residualized factors — UMP-KBB-STAB
+  v2 — and only with a 2026+ ABS-era effect shown first).
+- Officials probe stays in orchestration.daily (cost ~one schedule call per
+  tick): it keeps building the posting-time archive and pregame crews in
+  game_officials, which have display/product uses independent of modeling.
+- Infra kept: rotation predictor + factor machinery behind the off flags,
+  ballast study script, narrowed umpire prefix, ump_serve family. Snapshot
+  arms stored: +us8[_s1,_s2] / +ua8 / +usw8 / +ub8 @v20260810_015624.
+- Observation (not acted on): UMP_SERVE_KNOWN is ~a series-opener indicator;
+  any future context-family experiment should test a clean IS_SERIES_OPENER
+  directly rather than inherit it by accident here.

@@ -49,9 +49,17 @@ FEATURE_FLAGS: dict[str, bool] = {
     "dev_l5": False,
     "dev_l10": False,
     "dev_l20": False,
+    # 2026-07 cycle Wave 4: HP-umpire serve path. ump_serve is the honest
+    # pregame arm (rotation-predicted ump); ump_actual is the diagnostic
+    # ceiling (actual assignment — pregame-knowable for only ~60% of games,
+    # probe study 2026-08) and must never ship.
+    "ump_serve": False,
+    "ump_actual": False,
 }
 _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
-    "umpire": ("UMP_",),
+    # narrowed from ("UMP_",) for Wave 4: UMP_SERVE_/UMP_ACT_ carry their own
+    # flags, and the cumulative filter would strip them under this one
+    "umpire": ("UMP_K_FACTOR",),
     "wind_out": ("WIND_OUT",),
     "lineup": ("HOME_LINEUP_", "AWAY_LINEUP_", "DIFF_LINEUP_"),
     # more specific than the lineup prefixes: a disabled flag removes its
@@ -87,6 +95,8 @@ _FLAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "dev_l20": ("HOME_LINEUP_L20_", "AWAY_LINEUP_L20_", "DIFF_LINEUP_L20_",
                 "HOME_SP_L20_", "AWAY_SP_L20_", "DIFF_SP_L20_",
                 "B_DEV_L20_", "P_DEV_L20_"),
+    "ump_serve": ("UMP_SERVE_",),
+    "ump_actual": ("UMP_ACT_",),
 }
 
 # Feature families for the drop-one ablation profiles (E8a). Profile
@@ -98,7 +108,7 @@ _FORM_BASES = {"RUNS_PG_L10", "RUNS_PG_L30", "RA_PG_L10", "RA_PG_L30",
                "WOBA_L30", "XWOBA_CON_L30", "K_PCT_L30", "BB_PCT_L30",
                "N_PRIOR_GAMES", "REST_DAYS", "GAME_NUM"}
 FAMILIES = ("form", "sp", "bullpen", "lineup", "elo", "park", "weather",
-            "context", "travel", "priors", "defense")
+            "context", "travel", "priors", "defense", "ump_serve")
 
 
 def _family(col: str) -> str:
@@ -127,6 +137,9 @@ def _family(col: str) -> str:
         return "elo"
     if col.startswith(("PARK_", "VENUE_")):
         return "park"
+    # before the weather branch: its UMP_ test would claim these otherwise
+    if col.startswith(("UMP_SERVE_", "UMP_ACT_")):
+        return "ump_serve"
     if col in ("TEMP_F", "WIND_SPEED_MPH", "IS_OPEN_AIR") or \
             col.startswith(("WIND_OUT", "UMP_")):
         return "weather"
